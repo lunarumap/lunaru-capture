@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LUNARU Capture · TEST 0.13 HTTPS</title>
+<style>
+:root{--bg:#05090d;--panel:#0f1821;--line:#294052;--text:#f4f7fa;--muted:#a9b7c3;--accent:#49b8ff;--ok:#59e39a;--bad:#ffbd73}*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr auto}header{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0b1218;border-bottom:1px solid #1d2c37}.logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#041018;display:grid;place-items:center;font-weight:900}.brand b{display:block}.brand span{display:block;color:var(--muted);font-size:11px;margin-top:2px}main{position:relative;min-height:0;background:#000}video{width:100%;height:100%;object-fit:cover;background:#000}.card{position:absolute;left:14px;right:14px;top:14px;background:rgba(10,18,25,.94);border:1px solid var(--line);border-radius:16px;padding:14px;z-index:3}.card h1{font-size:18px;margin:0 0 8px}.line{font-size:12px;color:var(--muted);line-height:1.45;margin:4px 0}.ok{color:var(--ok)}.bad{color:var(--bad)}button{width:100%;border:0;border-radius:13px;padding:14px;font:inherit;font-weight:900;background:var(--accent);color:#031018;margin-top:10px}button.secondary{background:#172631;color:#fff;border:1px solid var(--line)}footer{padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:#0b1218;border-top:1px solid #1d2c37;font-size:11px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<header><div class="logo">L</div><div class="brand"><b>LUNARU Capture</b><span>TEST 0.13 · HTTPS camera check</span></div></header>
+<main>
+<video id="video" playsinline autoplay muted></video>
+<div class="card" id="card">
+<h1>Проверка камеры Redmi</h1>
+<div id="diag" class="line">Проверяю браузер…</div>
+<div id="status" class="line">Нажмите «Открыть камеру».</div>
+<button id="start">ОТКРЫТЬ КАМЕРУ</button>
+<button id="flip" class="secondary" style="display:none">ПЕРЕКЛЮЧИТЬ КАМЕРУ</button>
+</div>
+</main>
+<footer>Если камера откроется здесь, проблема локального content/file URI подтверждена и полный LUNARU Capture можно переносить на HTTPS.</footer>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);let stream=null;let facing='environment';
+function diag(){const secure=window.isSecureContext===true;const media=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);const proto=location.protocol;const motion=('DeviceOrientationEvent' in window);$('diag').innerHTML=`Камера API <span class="${media?'ok':'bad'}">${media?'✓':'✕'}</span> · Датчики <span class="${motion?'ok':'bad'}">${motion?'✓':'✕'}</span> · Secure context <span class="${secure?'ok':'bad'}">${secure?'✓':'✕'}</span> · ${proto}`;return{secure,media,proto,motion}}
+function stop(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+async function openCamera(){diag();if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){throw new Error('Camera API недоступен');}stop();let first=null;try{return await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing}},audio:false})}catch(e){first=e}try{return await navigator.mediaDevices.getUserMedia({video:true,audio:false})}catch(e2){const err=new Error(e2?.message||first?.message||'Permission denied');err.name=e2?.name||first?.name||'CameraError';throw err}}
+function explain(e){const n=e?.name||'';const m=e?.message||String(e||'');if(n==='NotAllowedError'||/permission|denied/i.test(m))return 'Доступ к камере запрещён браузером. Нажмите значок разрешений сайта в Chrome и разрешите камеру.';if(n==='NotFoundError')return 'Камера не найдена.';if(n==='NotReadableError')return 'Камера занята другим приложением или системой.';if(n==='OverconstrainedError')return 'Камера не поддерживает запрошенный режим.';return `Ошибка: ${n? n+': ':''}${m}`}
+async function start(){ $('status').textContent='Открываю камеру…';try{stream=await openCamera();$('video').srcObject=stream;await $('video').play();$('status').innerHTML='<span class="ok">Камера открыта ✓</span> · HTTPS работает.';$('start').textContent='ПЕРЕЗАПУСТИТЬ КАМЕРУ';$('flip').style.display='block'}catch(e){$('status').innerHTML=`<span class="bad">${explain(e)}</span>`}}
+$('start').onclick=start;$('flip').onclick=async()=>{facing=facing==='environment'?'user':'environment';await start()};diag();
+</script>
+</body>
+</html>
