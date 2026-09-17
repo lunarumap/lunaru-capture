@@ -34,6 +34,12 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Restore persistent Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: lunaru-native-android-debug-keystore-v1
+
       - name: Generate native platform projects
         working-directory: native_app
         run: |
