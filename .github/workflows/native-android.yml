@@ -3,7 +3,7 @@ name: Build native LUNARU Capture APK
 on:
   push:
     branches:
-      - native-flutter-v0.2
+      - native-flutter-v0.3
     paths:
       - 'native_app/**'
       - '.github/workflows/native-android.yml'
@@ -46,19 +46,6 @@ jobs:
           flutter create --platforms=android,ios --org com.lunaru --project-name lunaru_capture .
           rm -f test/widget_test.dart
 
-      - name: Apply Android camera startup hotfix
-        working-directory: native_app
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('lib/main.dart')
-          s = p.read_text()
-          s = s.replace('        imageFormatGroup: ImageFormatGroup.jpeg,\n', '')
-          s = s.replace('Нативная съёмка 360° · v0.2', 'Нативная съёмка 360° · v0.2.1')
-          s = s.replace("'appVersion': '0.2.0'", "'appVersion': '0.2.1'")
-          p.write_text(s)
-          PY
-
       - name: Add iOS camera and motion usage descriptions
         working-directory: native_app
         run: |
@@ -81,6 +68,10 @@ jobs:
         working-directory: native_app
         run: flutter analyze --no-fatal-infos
 
+      - name: Test camera orientation and layout
+        working-directory: native_app
+        run: flutter test
+
       - name: Build debug APK
         working-directory: native_app
         run: flutter build apk --debug
@@ -88,7 +79,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LUNARU-Capture-native-v0.2.1-debug
+          name: LUNARU-Capture-native-v0.3-debug
           path: native_app/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14

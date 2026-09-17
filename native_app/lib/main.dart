@@ -5,12 +5,15 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'camera_pose.dart';
 import 'package:motion_core/motion_core.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const LunaruApp());
 }
 
@@ -104,6 +107,7 @@ class _CaptureHomeState extends State<CaptureHome>
   StreamSubscription<MotionData>? _motionSubscription;
   MotionData? _motion;
 
+  bool _finishing = false;
   bool _starting = false;
   bool _capturing = false;
   bool _captureMode = false;
@@ -202,7 +206,6 @@ class _CaptureHomeState extends State<CaptureHome>
         selected,
         ResolutionPreset.max,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await controller.initialize();
 
@@ -259,7 +262,7 @@ class _CaptureHomeState extends State<CaptureHome>
     final currentMotion = _motion;
     final baseYaw = currentMotion == null
         ? null
-        : _norm(_deg(currentMotion.yaw));
+        : cameraPose(currentMotion.attitude).yaw;
 
     if (!mounted) return;
     setState(() {
@@ -284,8 +287,6 @@ class _CaptureHomeState extends State<CaptureHome>
         .replaceAll(RegExp(r'\s+'), '_');
   }
 
-  double _deg(double radians) => radians * 180 / math.pi;
-
   double _norm(double value) {
     var x = value % 360;
     if (x < 0) x += 360;
@@ -301,13 +302,14 @@ class _CaptureHomeState extends State<CaptureHome>
 
   void _onMotion(MotionData data) {
     _motion = data;
-    if (!_captureMode || _current >= _targets.length) {
+    if (!_captureMode || _finishing || _current >= _targets.length) {
       if (mounted) setState(() {});
       return;
     }
 
-    final yaw = _norm(_deg(data.yaw));
-    final pitch = _deg(data.pitch);
+    final pose = cameraPose(data.attitude);
+    final yaw = pose.yaw;
+    final pitch = pose.pitch;
     _baseYaw ??= yaw;
 
     final now = DateTime.now();
@@ -379,7 +381,7 @@ class _CaptureHomeState extends State<CaptureHome>
   }
 
   Future<void> _takePicture({required bool auto}) async {
-    if (_capturing || _current >= _targets.length) return;
+    if (!_captureMode || _finishing || _capturing || _current >= _targets.length) return;
     final camera = _camera;
     if (camera == null || !camera.value.isInitialized) return;
     if (_sessionPath == null) return;
@@ -390,6 +392,7 @@ class _CaptureHomeState extends State<CaptureHome>
       _status = auto ? 'Фиксирую…' : 'Снимаю вручную…';
     });
 
+    final shotPose = _motion == null ? null : cameraPose(_motion!.attitude);
     final frameNumber = _current + 1;
     final target = _targets[_current];
 
@@ -407,8 +410,8 @@ class _CaptureHomeState extends State<CaptureHome>
 
       final bytes = await dest.length();
       final dims = await _readJpegDimensions(dest);
-      final actualYaw = _motion == null ? null : _norm(_deg(_motion!.yaw));
-      final actualPitch = _motion == null ? null : _deg(_motion!.pitch);
+      final actualYaw = shotPose?.yaw;
+      final actualPitch = shotPose?.pitch;
 
       _frames.add({
         'frame': frameNumber,
@@ -497,8 +500,18 @@ class _CaptureHomeState extends State<CaptureHome>
   }
 
   Future<void> _finishStation() async {
-    if (!_captureMode) return;
-    await _writeManifest();
+    if (!_captureMode || _capturing || _finishing) return;
+    setState(() {
+      _finishing = true;
+      _lockStarted = null;
+      _targetLocked = false;
+    });
+    try {
+      await _writeManifest();
+    } catch (e) {
+      if (mounted) setState(() { _finishing = false; _status = "Ошибка сохранения: $e"; });
+      return;
+    }
     if (!mounted) return;
 
     final count = _frames.length;
@@ -526,6 +539,7 @@ class _CaptureHomeState extends State<CaptureHome>
     setState(() {
       _camera = null;
       _captureMode = false;
+      _finishing = false;
       _capturing = false;
       _targetLocked = false;
       _insideTarget = false;
@@ -587,7 +601,7 @@ class _CaptureHomeState extends State<CaptureHome>
     if (_sessionPath == null) return;
     final manifest = {
       'schema': 'lunaru-capture-native-station-v1',
-      'appVersion': '0.2.0',
+      'appVersion': '0.3.0',
       'objectName': _objectController.text.trim(),
       'stationName': _stationController.text.trim(),
       'expectedFrames': _targets.length,
@@ -644,7 +658,7 @@ class _CaptureHomeState extends State<CaptureHome>
             ),
             const SizedBox(height: 4),
             const Text(
-              'Нативная съёмка 360° · v0.2',
+              'Нативная съёмка 360° · v0.3',
               style: TextStyle(color: Colors.white70, fontSize: 15),
             ),
             const SizedBox(height: 30),
@@ -701,158 +715,82 @@ class _CaptureHomeState extends State<CaptureHome>
   Widget _buildCapture() {
     final camera = _camera;
     final done = _current >= _targets.length;
-    final targetLabel = done ? 'Готово' : _targets[_current].label;
-    final progress = done ? _targets.length : _current + 1;
     final color = _targetColor();
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (camera != null && camera.value.isInitialized)
-          Center(
-            child: AspectRatio(
-              aspectRatio: camera.value.aspectRatio,
-              child: CameraPreview(camera),
-            ),
-          )
-        else
-          const Center(child: CircularProgressIndicator()),
-        Container(color: Colors.black.withValues(alpha: 0.10)),
-        SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _glassPill(
-                        '${_stationController.text} · $targetLabel',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _glassPill('$progress/32'),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              if (!done)
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 120),
-                      width: 170,
-                      height: 170,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: color, width: 5),
-                        boxShadow: _targetLocked
-                            ? [
-                                BoxShadow(
-                                  color: const Color(0xFF59E39A)
-                                      .withValues(alpha: 0.30),
-                                  blurRadius: 30,
-                                  spreadRadius: 10,
-                                ),
-                              ]
-                            : null,
-                      ),
-                    ),
-                    Text(
-                      _guidanceArrow(),
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 72,
-                        fontWeight: FontWeight.w800,
-                        height: 1,
-                      ),
-                    ),
-                  ],
-                )
-              else
-                const Icon(
-                  Icons.check_circle_rounded,
-                  size: 120,
-                  color: Color(0xFF59E39A),
-                ),
-              const SizedBox(height: 18),
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 18),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.62),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      done
-                          ? 'Станция снята полностью'
-                          : _targetLocked
-                              ? 'ДЕРЖИТЕ · АВТОСЪЁМКА'
-                              : _insideTarget
-                                  ? 'ПОЧТИ · ДЕРЖИТЕ РОВНО'
-                                  : 'НАВЕДИТЕ В ЦЕЛЬ',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _lastShotSummary == null
-                          ? _status
-                          : '$_status\nПоследний кадр: $_lastShotSummary',
-                      textAlign: TextAlign.center,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _frames.isEmpty || _capturing
-                            ? null
-                            : _retakePrevious,
-                        child: const Text('ПЕРЕСНЯТЬ'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: done || _capturing
-                            ? null
-                            : () => _takePicture(auto: false),
-                        child: Text(_capturing ? 'СОХРАНЯЮ…' : 'СНЯТЬ'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _capturing ? null : _finishStation,
-                        child: const Text('ЗАВЕРШИТЬ'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+    final hold = _lockStarted == null ? 0.0 :
+        (DateTime.now().difference(_lockStarted!).inMilliseconds /
+            _holdDuration.inMilliseconds).clamp(0.0, 1.0);
+    return SafeArea(
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_stationController.text, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(done ? 'Готово' : _targets[_current].label,
+                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+            ])),
+            _glassPill('${_frames.length}/32'),
+          ]),
         ),
-      ],
+        Expanded(child: LayoutBuilder(builder: (context, bounds) {
+          final ratio = camera != null && camera.value.isInitialized
+              ? 1 / camera.value.aspectRatio : 3 / 4;
+          final width = math.min(bounds.maxWidth, bounds.maxHeight * ratio);
+          final height = width / ratio;
+          return Center(child: SizedBox(width: width, height: height,
+            child: ClipRect(child: Stack(fit: StackFit.expand, children: [
+              if (camera != null && camera.value.isInitialized)
+                CameraPreview(camera)
+              else const Center(child: CircularProgressIndicator()),
+              Center(child: SizedBox(width: 120, height: 120,
+                child: Stack(alignment: Alignment.center, children: [
+                  SizedBox.expand(child: CircularProgressIndicator(
+                    value: _capturing ? null : hold,
+                    color: color, backgroundColor: Colors.white54, strokeWidth: 4)),
+                  Icon(done ? Icons.check : Icons.add, color: color, size: 32),
+                ]))),
+              if (!done) Align(
+                alignment: Alignment(
+                  (-_yawError / 45).clamp(-0.8, 0.8),
+                  (_pitchError / 45).clamp(-0.8, 0.8)),
+                child: Container(width: 48, height: 48,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                    color: Colors.black54, border: Border.all(color: color, width: 3)),
+                  child: Center(child: Text(_guidanceArrow(),
+                    style: TextStyle(color: color, fontSize: 28))))),
+            ])),
+          ));
+        })),
+        Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 4), child: Column(children: [
+          Text(done ? 'Станция снята полностью' : _capturing ? 'СОХРАНЯЮ КАДР…'
+              : _motion == null ? 'Нет данных датчиков · доступна ручная съёмка'
+              : _targetLocked ? 'ДЕРЖИТЕ · АВТОСЪЁМКА'
+              : _insideTarget ? 'ДЕРЖИТЕ ТЕЛЕФОН НЕПОДВИЖНО' : 'СОВМЕСТИТЕ КРУЖОК С КРЕСТОМ',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          if (!done && _motion != null)
+            Text('Поворот: ${_yawError.toStringAsFixed(0)}° · наклон: ${_pitchError.toStringAsFixed(0)}°',
+              style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center, style: const TextStyle(fontSize: 12)),
+          if (_lastShotSummary != null) Text(_lastShotSummary!,
+            maxLines: 1, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+        ])),
+        Padding(padding: const EdgeInsets.all(12), child: Column(children: [
+          SizedBox(width: double.infinity, child: FilledButton.icon(
+            onPressed: done || _capturing || _finishing ? null : () => _takePicture(auto: false),
+            icon: const Icon(Icons.camera_alt), label: const Text('Снять вручную'))),
+          Row(children: [
+            Expanded(child: OutlinedButton(
+              onPressed: _frames.isEmpty || _capturing || _finishing ? null : _retakePrevious,
+              child: const FittedBox(child: Text('Переснять')))),
+            const SizedBox(width: 12),
+            Expanded(child: OutlinedButton(
+              onPressed: _capturing || _finishing ? null : _finishStation,
+              child: const FittedBox(child: Text('Завершить')))),
+          ]),
+        ])),
+      ]),
     );
   }
 
