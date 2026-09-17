@@ -38,6 +38,7 @@ jobs:
         working-directory: native_app
         run: |
           flutter create --platforms=android,ios --org com.lunaru --project-name lunaru_capture .
+          rm -f test/widget_test.dart
 
       - name: Add iOS camera and motion usage descriptions
         working-directory: native_app
