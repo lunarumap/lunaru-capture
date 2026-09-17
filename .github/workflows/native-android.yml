@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - native-flutter-v0.3
+      - native-flutter-v0.2
     paths:
       - 'native_app/**'
       - '.github/workflows/native-android.yml'
