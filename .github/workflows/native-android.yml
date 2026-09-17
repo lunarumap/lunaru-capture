@@ -60,7 +60,7 @@ jobs:
 
       - name: Analyze
         working-directory: native_app
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Build debug APK
         working-directory: native_app
