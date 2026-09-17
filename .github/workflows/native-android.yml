@@ -1,0 +1,74 @@
+name: Build native LUNARU Capture APK
+
+on:
+  push:
+    branches:
+      - native-flutter-v0.1
+    paths:
+      - 'native_app/**'
+      - '.github/workflows/native-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          channel: stable
+          cache: true
+
+      - name: Generate native platform projects
+        working-directory: native_app
+        run: |
+          flutter create --platforms=android,ios --org com.lunaru --project-name lunaru_capture .
+
+      - name: Add iOS camera and motion usage descriptions
+        working-directory: native_app
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ios/Runner/Info.plist')
+          s = p.read_text()
+          marker = '</dict>'
+          additions = '''\n\t<key>NSCameraUsageDescription</key>\n\t<string>LUNARU Capture uses the camera to capture panorama source photographs.</string>\n\t<key>NSMotionUsageDescription</key>\n\t<string>LUNARU Capture uses motion sensors to guide panorama capture.</string>\n'''
+          if 'NSCameraUsageDescription' not in s:
+              s = s.replace(marker, additions + marker)
+          p.write_text(s)
+          PY
+
+      - name: Get dependencies
+        working-directory: native_app
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: native_app
+        run: flutter analyze
+
+      - name: Build debug APK
+        working-directory: native_app
+        run: flutter build apk --debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LUNARU-Capture-native-v0.1-debug
+          path: native_app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
