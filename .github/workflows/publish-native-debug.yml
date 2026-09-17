@@ -1,0 +1,47 @@
+name: Publish native LUNARU Capture debug APK
+
+on:
+  push:
+    branches:
+      - native-flutter-v0.1
+    paths:
+      - '.github/workflows/publish-native-debug.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download successful APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: '10506145741'
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > artifact.zip
+          mkdir artifact
+          unzip -q artifact.zip -d artifact
+          find artifact -maxdepth 2 -type f -print
+          APK="$(find artifact -type f -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          cp "$APK" LUNARU_Capture_native_v0.1_debug.apk
+          ls -lh LUNARU_Capture_native_v0.1_debug.apk
+          sha256sum LUNARU_Capture_native_v0.1_debug.apk
+
+      - name: Publish debug release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete native-v0.1-debug --yes --cleanup-tag || true
+          gh release create native-v0.1-debug \
+            LUNARU_Capture_native_v0.1_debug.apk \
+            --target 5dbd2ad856a5c470a0b908c8bf79ce6b886783d7 \
+            --title 'LUNARU Capture native v0.1 debug' \
+            --notes 'First native Android test build. Native camera preview + native takePicture() JPEG capture + guided 32-frame station + motion sensors + manifest. Debug/test build.' \
+            --prerelease
