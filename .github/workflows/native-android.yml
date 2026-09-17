@@ -3,7 +3,7 @@ name: Build native LUNARU Capture APK
 on:
   push:
     branches:
-      - native-flutter-v0.1
+      - native-flutter-v0.2
     paths:
       - 'native_app/**'
       - '.github/workflows/native-android.yml'
@@ -69,7 +69,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LUNARU-Capture-native-v0.1-debug
+          name: LUNARU-Capture-native-v0.2-debug
           path: native_app/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
