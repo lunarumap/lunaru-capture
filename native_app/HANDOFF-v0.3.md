@@ -1,32 +1,16 @@
-# LUNARU Capture v0.3 — pending build
+# LUNARU Capture v0.3 — built, pending Redmi 9 test
 
-User: Mikhail Trenin. Test device: Redmi 9. Installed version: native v0.2.
-Reported failures: automatic capture does not trigger in normal shooting posture;
-portrait preview and aim overlay are misaligned; button labels wrap.
+Version 0.3.0+4; package com.lunaru.lunaru_capture.
+Source commit: 6582a48d22a60bd6839985dd3cd9a693de14cf50.
+Successful Actions run: 35280774717; artifact 10522193718.
+Flutter analysis and all four orientation/target-plan tests passed. Device and visual layout tests have NOT been performed.
 
-Repository: https://github.com/lunarumap/lunaru-capture
-Source branch before changes: native-flutter-v0.2, commit 1cd9062571e430811ad1defed3d56f51fc51774b.
-That commit's v0.2.1 build succeeded (Actions run 35276337397), but only patches camera startup.
-Drive folder CAPTURE: https://drive.google.com/drive/folders/1ldYPMKXKgByCVdxO3zPtIdd5dP8Iyz7p
-Installed v0.2 ZIP: Drive ID 1btQomj-UWOmO3Tfow7IIh62aaTeDNNfi (contains APK only).
+Changes: rear-camera -Z quaternion direction instead of device Euler pitch; portrait preview and centered guidance; separated controls; hold progress; capture pause during finish dialog; pose recorded at shutter invocation.
 
-Prepared branch: native-flutter-v0.3. Version: 0.3.0+4.
-Changes:
-- Calculate rear-camera direction from attitude quaternion (device -Z).
-  motion_core pitch is approximately +90 degrees when held upright; it is not camera elevation.
-- Portrait orientation, reciprocal preview aspect ratio, center aim inside preview.
-- Separate retake/finish button row and full-width manual shutter.
-- Hold-progress indicator and signed target errors; completed frame count.
-- Stop automatic capture during station finish dialog; save pose at shutter invocation.
-- Move camera startup fix into source instead of editing source during CI.
-- Add orientation regression tests and CI flutter test step.
+Delivered ZIP: https://drive.google.com/file/d/1NQhUTBpKec8PCOQKYeNaSROV1w3t18E3/view
+Drive CAPTURE folder: 1ldYPMKXKgByCVdxO3zPtIdd5dP8Iyz7p.
+ZIP SHA256: 00742309e88a7b2a4acffd64385bf24ab51a50303f52708fc56ed525270b2f5f.
 
-Validation: git diff --check passed. Flutter/Dart not installed locally.
-Flutter analyze/tests/APK build have NOT run for v0.3. No claim of device validation.
-Push was rejected by automatic approval review because explicit permission to publish
-modified source to GitHub was required. Do not retry without user approval.
-After approval: push branch; wait for CI and fix any analyze/test failures; download
-resulting APK; verify version and compare signing certificate with installed v0.2.
-Signing cache is branch-scoped, so verify upgrade compatibility before delivery.
-Save final APK ZIP to existing Drive CAPTURE folder, verify metadata, provide link.
-Do not call a build successful merely because a workflow was triggered.
+IMPORTANT: v0.3 signing certificate SHA256 87af42e85fe91b8df7345e2e7693278058eed9d140d2976a013e59e192be1db4 differs from installed v0.2 certificate c0dc12d8600105d3a8e2ff964c042467e2844ec0ec9eba87189d074405022b5f. Rebuilding on v0.2 branch did not restore the original installed key. In-place update is NOT compatible. Do not instruct deletion before needed photographs are backed up. No user data was deleted. Original v0.2 remains in Drive (1btQomj-UWOmO3Tfow7IIh62aaTeDNNfi).
+
+Next: user device test on Redmi 9; confirm camera preview, horizontal auto shot and subsequent targets. User authorized GitHub publication and builds. Source branches native-flutter-v0.2 and native-flutter-v0.3 contain this implementation; main is still the web prototype.
