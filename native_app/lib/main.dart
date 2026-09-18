@@ -497,32 +497,22 @@ class _CaptureHomeState extends State<CaptureHome>
   Future<void> _retakePrevious() async {
     if (_capturing || _finishing || _frames.isEmpty) return;
     _finishing = true;
-    final previous = _frames.removeLast();
-    final frame = previous['frame'] as int?;
-    final filename = previous['file'] as String?;
-
-    if (filename != null && _sessionPath != null) {
-      final file = File(p.join(_sessionPath!, filename));
-      if (await file.exists()) await file.delete();
-    }
-
-    if (frame != null) {
-      _current = math.max(0, frame - 1);
-    } else {
-      _current = math.max(0, _current - 1);
-    }
-
-    _poseHistory.clear();
-    _aimFilter.reset();
-    _lockStarted = null;
-    _targetLocked = false;
-    _insideTarget = false;
-    _lastShotSummary = null;
-    await _writeManifest();
-
-    _finishing = false;
-    if (mounted) {
-      setState(() => _status = 'Переснять: ${_targets[_current].label}');
+    try {
+      // Keep the old JPEG until a replacement is captured successfully.
+      final previous = _frames.removeLast();
+      _current = (previous['frame'] as int) - 1;
+      _poseHistory.clear();
+      _aimFilter.reset();
+      _lockStarted = null;
+      _targetLocked = false;
+      _insideTarget = false;
+      _lastShotSummary = null;
+      await _writeManifest();
+      if (mounted) setState(() => _status = 'Переснять: ${_targets[_current].label}');
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Ошибка пересъёмки: $e');
+    } finally {
+      if (mounted) setState(() => _finishing = false);
     }
   }
 
