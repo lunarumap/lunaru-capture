@@ -69,7 +69,7 @@ jobs:
         working-directory: native_app
         run: flutter analyze --no-fatal-infos
 
-      - name: Test camera orientation and layout
+      - name: Test camera orientation and aiming
         working-directory: native_app
         run: flutter test
 
@@ -80,7 +80,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LUNARU-Capture-native-v0.3-debug
+          name: LUNARU-Capture-native-v0.4-debug
           path: native_app/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14

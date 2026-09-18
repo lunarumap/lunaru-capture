@@ -1,7 +1,7 @@
 name: lunaru_capture
 publish_to: 'none'
 description: LUNARU Capture — guided native 360 capture for photogrammetry and virtual tours.
-version: 0.3.0+4
+version: 0.4.0+5
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  share_plus: ^13.3.0
   camera: ^0.12.1
   motion_core: ^0.2.1
   path_provider: ^2.1.6

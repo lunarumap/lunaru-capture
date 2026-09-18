@@ -7,6 +7,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'camera_pose.dart';
+import 'aim_filter.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:motion_core/motion_core.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -82,10 +84,10 @@ List<TargetPose> buildTargets() {
 
   // 4) Zenith / nadir. Yaw is deliberately ignored here.
   result.addAll(const [
-    TargetPose(0, 75, 'Зенит 1/2', ignoreYaw: true),
-    TargetPose(180, 75, 'Зенит 2/2', ignoreYaw: true),
-    TargetPose(0, -75, 'Надир 1/2', ignoreYaw: true),
-    TargetPose(180, -75, 'Надир 2/2', ignoreYaw: true),
+    TargetPose(0, 75, 'Камеру вверх 1/2', ignoreYaw: true),
+    TargetPose(180, 75, 'Камеру вверх 2/2', ignoreYaw: true),
+    TargetPose(0, -75, 'Камеру вниз 1/2', ignoreYaw: true),
+    TargetPose(180, -75, 'Камеру вниз 2/2', ignoreYaw: true),
   ]);
   return result;
 }
@@ -117,6 +119,9 @@ class _CaptureHomeState extends State<CaptureHome>
 
   int _current = 0;
   double? _baseYaw;
+  final _aimFilter = AimFilter();
+  double _displayYaw = 0;
+  double _displayPitch = 0;
   double _yawError = 0;
   double _pitchError = 0;
   DateTime? _lockStarted;
@@ -129,14 +134,14 @@ class _CaptureHomeState extends State<CaptureHome>
   final List<Map<String, dynamic>> _frames = [];
   final List<PoseSample> _poseHistory = [];
 
-  // v0.2 deliberately uses forgiving thresholds for inexpensive Android IMUs.
+  // Keep capture bounds below half the 30-degree horizontal target spacing.
   static const _holdDuration = Duration(milliseconds: 600);
   static const _postShotCooldown = Duration(milliseconds: 550);
   static const _stabilityWindow = Duration(milliseconds: 320);
-  static const _enterYawTolerance = 18.0;
-  static const _enterPitchTolerance = 14.0;
-  static const _keepYawTolerance = 28.0;
-  static const _keepPitchTolerance = 22.0;
+  static const _enterYawTolerance = 8.0;
+  static const _enterPitchTolerance = 8.0;
+  static const _keepYawTolerance = 10.0;
+  static const _keepPitchTolerance = 10.0;
   static const _maxYawJitter = 8.0;
   static const _maxPitchJitter = 6.0;
 
@@ -162,6 +167,10 @@ class _CaptureHomeState extends State<CaptureHome>
     if (!_captureMode) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      _lockStarted = null;
+      _targetLocked = false;
+      _poseHistory.clear();
+      _aimFilter.reset();
       _camera?.dispose();
       _camera = null;
     } else if (state == AppLifecycleState.resumed) {
@@ -254,7 +263,7 @@ class _CaptureHomeState extends State<CaptureHome>
           ? 'Station_01'
           : _stationController.text.trim(),
     );
-    final dir = Directory(p.join(docs.path, 'LUNARU', objectName, stationName));
+    final dir = Directory(p.join(docs.path, 'LUNARU', objectName, '${stationName}_${DateTime.now().microsecondsSinceEpoch}'));
     await dir.create(recursive: true);
 
     // Yaw is relative to the direction in which the operator starts.
@@ -269,6 +278,7 @@ class _CaptureHomeState extends State<CaptureHome>
       _sessionPath = dir.path;
       _frames.clear();
       _poseHistory.clear();
+      _aimFilter.reset();
       _current = 0;
       _baseYaw = baseYaw;
       _captureMode = true;
@@ -313,6 +323,13 @@ class _CaptureHomeState extends State<CaptureHome>
     _baseYaw ??= yaw;
 
     final now = DateTime.now();
+    if (_poseHistory.isNotEmpty &&
+        now.difference(_poseHistory.last.time).inMilliseconds > 250) {
+      _poseHistory.clear();
+      _lockStarted = null;
+      _targetLocked = false;
+      _aimFilter.reset();
+    }
     _poseHistory.add(PoseSample(now, yaw, pitch));
     final oldest = now.subtract(_stabilityWindow);
     _poseHistory.removeWhere((sample) => sample.time.isBefore(oldest));
@@ -323,6 +340,9 @@ class _CaptureHomeState extends State<CaptureHome>
 
     _yawError = target.ignoreYaw ? 0 : _angleDiff(yaw, wantedYaw);
     _pitchError = pitch - wantedPitch;
+    _aimFilter.update(_yawError, _pitchError, now);
+    _displayYaw = _aimFilter.yaw;
+    _displayPitch = _aimFilter.pitch;
 
     final yawTolerance = _targetLocked
         ? _keepYawTolerance
@@ -337,7 +357,10 @@ class _CaptureHomeState extends State<CaptureHome>
             _pitchError.abs() <= pitchTolerance;
 
     final stable = _isPoseStable(target.ignoreYaw);
-    final ready = inside && stable && now.isAfter(_cooldownUntil);
+    final displayInside = _displayYaw.abs() <= yawTolerance &&
+        _displayPitch.abs() <= pitchTolerance;
+    final ready = inside && displayInside && stable &&
+        _camera != null && _camera!.value.isInitialized && now.isAfter(_cooldownUntil);
 
     _insideTarget = inside;
 
@@ -441,6 +464,7 @@ class _CaptureHomeState extends State<CaptureHome>
       setState(() {
         _lastShotSummary = summary;
         _current++;
+        _aimFilter.reset();
         _capturing = false;
         _targetLocked = false;
         _insideTarget = false;
@@ -471,7 +495,8 @@ class _CaptureHomeState extends State<CaptureHome>
   }
 
   Future<void> _retakePrevious() async {
-    if (_capturing || _frames.isEmpty) return;
+    if (_capturing || _finishing || _frames.isEmpty) return;
+    _finishing = true;
     final previous = _frames.removeLast();
     final frame = previous['frame'] as int?;
     final filename = previous['file'] as String?;
@@ -488,12 +513,14 @@ class _CaptureHomeState extends State<CaptureHome>
     }
 
     _poseHistory.clear();
+    _aimFilter.reset();
     _lockStarted = null;
     _targetLocked = false;
     _insideTarget = false;
     _lastShotSummary = null;
     await _writeManifest();
 
+    _finishing = false;
     if (mounted) {
       setState(() => _status = 'Переснять: ${_targets[_current].label}');
     }
@@ -601,7 +628,7 @@ class _CaptureHomeState extends State<CaptureHome>
     if (_sessionPath == null) return;
     final manifest = {
       'schema': 'lunaru-capture-native-station-v1',
-      'appVersion': '0.3.0',
+      'appVersion': '0.4.0',
       'objectName': _objectController.text.trim(),
       'stationName': _stationController.text.trim(),
       'expectedFrames': _targets.length,
@@ -619,15 +646,75 @@ class _CaptureHomeState extends State<CaptureHome>
 
   String _guidanceArrow() {
     if (_current >= _targets.length || _motion == null) return '✓';
-    final target = _targets[_current];
+    if (_targetLocked) return '●';
+    if (_displayPitch.abs() > _enterPitchTolerance) {
+      return _displayPitch > 0 ? '↓' : '↑';
+    }
+    if (_displayYaw.abs() > _enterYawTolerance) {
+      return _displayYaw > 0 ? '←' : '→';
+    }
+    return '•';
+  }
 
-    if (_pitchError.abs() > _enterPitchTolerance) {
-      return _pitchError > 0 ? '↓' : '↑';
+  String _directionText() {
+    final parts = <String>[];
+    if (_displayPitch.abs() > _enterPitchTolerance) {
+      parts.add('${_displayPitch > 0 ? "Опустите" : "Поднимите"} камеру на ${_displayPitch.abs().round()}°');
     }
-    if (!target.ignoreYaw && _yawError.abs() > _enterYawTolerance) {
-      return _yawError > 0 ? '←' : '→';
+    if (_displayYaw.abs() > _enterYawTolerance) {
+      parts.add('${_displayYaw > 0 ? "Влево" : "Вправо"} на ${_displayYaw.abs().round()}°');
     }
-    return _targetLocked ? '●' : '•';
+    return parts.isEmpty ? 'Удерживайте камеру неподвижно' : parts.join(' · ');
+  }
+
+  Future<void> _showSavedStations() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final root = Directory(p.join(docs.path, 'LUNARU'));
+      final manifests = <File>[];
+      if (await root.exists()) {
+        await for (final entity in root.list(recursive: true)) {
+          if (entity is File && p.basename(entity.path) == 'manifest.json') {
+            manifests.add(entity);
+          }
+        }
+      }
+      manifests.sort((a, b) => b.path.compareTo(a.path));
+      if (!mounted) return;
+      await showModalBottomSheet<void>(context: context, builder: (context) {
+        return SafeArea(child: manifests.isEmpty
+          ? const Padding(padding: EdgeInsets.all(24), child: Text('Сохранённых станций пока нет'))
+          : ListView(children: [
+              const ListTile(title: Text('Отправить оригиналы'),
+                subtitle: Text('Выберите станцию, затем Google Диск. JPEG передаются без изменения.')),
+              for (final manifest in manifests) ListTile(
+                title: Text(p.basename(manifest.parent.path)),
+                subtitle: Text(p.basename(manifest.parent.parent.path)),
+                trailing: const Icon(Icons.share),
+                onTap: () { Navigator.pop(context); _shareStation(manifest); },
+              ),
+            ]));
+      });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Не удалось открыть станции: $e');
+    }
+  }
+
+  Future<void> _shareStation(File manifest) async {
+    try {
+      final data = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+      final frames = data['frames'] as List<dynamic>;
+      final files = <XFile>[];
+      for (final frame in frames) {
+        final file = File(p.join(manifest.parent.path, p.basename(frame['file'] as String)));
+        if (!await file.exists()) throw Exception('Нет файла ${p.basename(file.path)}');
+        files.add(XFile(file.path, mimeType: 'image/jpeg'));
+      }
+      if (files.isEmpty) throw Exception('В станции нет фотографий');
+      await SharePlus.instance.share(ShareParams(files: files));
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Не удалось отправить: $e');
+    }
   }
 
   Color _targetColor() {
@@ -658,7 +745,7 @@ class _CaptureHomeState extends State<CaptureHome>
             ),
             const SizedBox(height: 4),
             const Text(
-              'Нативная съёмка 360° · v0.3',
+              'Нативная съёмка 360° · v0.4',
               style: TextStyle(color: Colors.white70, fontSize: 15),
             ),
             const SizedBox(height: 30),
@@ -686,12 +773,17 @@ class _CaptureHomeState extends State<CaptureHome>
               ),
               child: Text(
                 _motionAvailable
-                    ? 'Датчики: готовы · порядок: горизонт → верх → низ → зенит → надир'
+                    ? 'Датчики: готовы · порядок: горизонт → верх → низ → камера вверх → камера вниз'
                     : 'Датчики: проверка…',
                 style: const TextStyle(color: Colors.white70),
               ),
             ),
             const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _starting ? null : _showSavedStations,
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('Станции · отправить оригиналы'),
+            ),
             FilledButton.icon(
               onPressed: _starting ? null : _startCapture,
               icon: const Icon(Icons.camera_alt_rounded),
@@ -751,8 +843,8 @@ class _CaptureHomeState extends State<CaptureHome>
                 ]))),
               if (!done) Align(
                 alignment: Alignment(
-                  (-_yawError / 45).clamp(-0.8, 0.8),
-                  (_pitchError / 45).clamp(-0.8, 0.8)),
+                  (-_displayYaw / 45).clamp(-0.8, 0.8),
+                  (_displayPitch / 45).clamp(-0.8, 0.8)),
                 child: Container(width: 48, height: 48,
                   decoration: BoxDecoration(shape: BoxShape.circle,
                     color: Colors.black54, border: Border.all(color: color, width: 3)),
@@ -769,7 +861,7 @@ class _CaptureHomeState extends State<CaptureHome>
             textAlign: TextAlign.center,
             style: TextStyle(color: color, fontWeight: FontWeight.bold)),
           if (!done && _motion != null)
-            Text('Поворот: ${_yawError.toStringAsFixed(0)}° · наклон: ${_pitchError.toStringAsFixed(0)}°',
+            Text(_directionText(),
               style: const TextStyle(color: Colors.white70, fontSize: 12)),
           Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center, style: const TextStyle(fontSize: 12)),
