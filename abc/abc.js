@@ -113,7 +113,7 @@
   }
   function summary(key){
     const m=state.methods[key];
-    if(key==='C')return `${m.videos.length} видео · ${duration(m.videos.reduce((s,v)=>s+(v.savedMs||0),0))} · ${mb(m.videos.reduce((s,v)=>s+v.bytes,0))}${m.finished ? ' · проход завершён' : ''}${m.videos.some(v=>v.status==='interrupted') ? ' · есть прерванная запись, проверьте воспроизведение' : ''}`;
+    if(key==='C')return `${m.videos.filter(v=>v.chunks>0).length} видео · ${duration(m.videos.reduce((s,v)=>s+(v.savedMs||0),0))} · ${mb(m.videos.reduce((s,v)=>s+v.bytes,0))}${m.finished ? ' · проход завершён' : ''}${m.videos.some(v=>v.status==='interrupted') ? ' · есть прерванная запись, проверьте воспроизведение' : ''}`;
     return `${m.shots.filter(Boolean).length}/${METHODS[key].grid.length} кадров · осталось ${METHODS[key].grid.length-m.shots.filter(Boolean).length} · ${mb(m.shots.filter(Boolean).reduce((s,f)=>s+f.bytes,0))}`;
   }
   function makeButton(text, cls, fn){
@@ -126,7 +126,7 @@
     for(const p of projects){
       const b=makeButton('', 'alt',async()=>{await writes;state=await read('projects',p.id);retakeIndex=null;mirror();await openStation();});
       const title=document.createElement('b');title.textContent=p.objectName;
-      const desc=document.createElement('span');desc.textContent=`S01 · A: ${p.methods.A.shots.filter(Boolean).length}/32 · B: ${p.methods.B.shots.filter(Boolean).length}/40 · C: ${p.methods.C.videos.length} видео`;
+      const desc=document.createElement('span');desc.textContent=`S01 · A: ${p.methods.A.shots.filter(Boolean).length}/32 · B: ${p.methods.B.shots.filter(Boolean).length}/40 · C: ${p.methods.C.videos.filter(v=>v.chunks>0).length} видео`;
       b.append(title,desc);$('savedObjects').append(b);
     }
     $('bootStatus').textContent=projects.length ? 'Сохранённые объекты — открыть, продолжить или скачать:' : 'Создайте объект. Все три способа останутся в одной станции S01.';
@@ -160,7 +160,7 @@
   function renderExports(){
     $('exportPanel').replaceChildren();
     for(const key of Object.keys(METHODS)){
-      const m=state.methods[key],count=m.shots.filter(Boolean).length+m.videos.length;
+      const m=state.methods[key],count=m.shots.filter(Boolean).length+m.videos.filter(v=>v.chunks>0).length;
       const box=document.createElement('div');box.className='exportSet';box.dataset.export=key;
       const title=document.createElement('strong');title.textContent=METHODS[key].folder;
       const info=document.createElement('small');
@@ -447,7 +447,13 @@
       });
     };
     recorder.onerror=e=>{videoError=e.error||new Error('Ошибка записи видео');report(videoError);};
-    recorder.start(1000);
+    try{recorder.start(1000);}catch(e){
+      // No media exists if start throws. Do not leave an empty successful-looking
+      // clip or a recorder whose stop promise can never resolve.
+      recorder=null;activeVideo=null;videoClock=0;videoStopped=null;
+      method().videos=method().videos.filter(v=>v.id!==videoId);
+      await persist();throw e;
+    }
     // Some MP4 encoders delay timeslice events until a keyframe. Request the
     // buffered data explicitly as well, so durable storage starts during capture.
     videoFlushTimer=setInterval(()=>{

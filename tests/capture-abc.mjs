@@ -153,6 +153,19 @@ try{
   await page.click('#confirmCameraBtn');await photo();await stop();
   assert.equal(await page.evaluate(()=>state.methods.B.shots.at(-1).source),'video-frame');
 
+  // Encoder allocation can fail even when isTypeSupported succeeds.
+  await page.click('[data-method="C"]');
+  await page.evaluate(()=>{
+    window.originalRecorder=window.MediaRecorder;
+    window.MediaRecorder=class extends window.originalRecorder {
+      start(){throw new DOMException('Test encoder unavailable','NotSupportedError');}
+    };
+  });
+  await setup();await page.click('#confirmCameraBtn');await page.locator('#stationStart.active').waitFor();
+  assert.equal(await page.evaluate(()=>state.methods.C.videos.length),2);
+  assert.match(await page.textContent('#status'),/encoder unavailable/);
+  await page.evaluate(()=>{window.MediaRecorder=window.originalRecorder;});
+
   // Reload during recording: preserve every already committed chunk; never call it complete.
   await page.click('[data-method="C"]');await start();await page.waitForTimeout(3200);
   const durable=await page.evaluate(()=>structuredClone(state.methods.C.videos.at(-1)));
@@ -169,7 +182,8 @@ try{
     checks:['A 32 frames and retake','B 40-frame zigzag','C real MediaRecorder pause/resume and two original video files',
       'reload recovery','three ZIPs, original media sizes and metadata','exported video decoding',
       'quota failure does not advance','native photo actual dimensions','native failure needs explicit fallback confirmation',
-      'reload during recording preserves committed chunks and marks interruption','second tab cannot overwrite active data'],
+      'reload during recording preserves committed chunks and marks interruption','second tab cannot overwrite active data',
+      'encoder start failure leaves no empty successful clip or stalled recorder'],
     artifacts:[A.file,B.file,C.file]};
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(e){
