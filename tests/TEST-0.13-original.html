@@ -1,0 +1,430 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>LUNARU Capture · TEST 0.13</title><style>
+:root{--bg:#05090d;--panel:#0f1821;--line:#294052;--text:#f4f7fa;--muted:#a9b7c3;--accent:#49b8ff;--ok:#59e39a}*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}body{overflow:hidden}button,input{font:inherit}#app{height:100%;display:grid;grid-template-rows:auto 1fr auto}header{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0b1218;border-bottom:1px solid #1d2c37}.logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#041018;display:grid;place-items:center;font-weight:900}.brand b{display:block;font-size:15px}.brand span{display:block;font-size:11px;color:var(--muted);margin-top:2px}main{position:relative;background:#000;min-height:0}video{width:100%;height:100%;object-fit:cover;background:#000}.screen{position:absolute;inset:0;display:none;place-items:center;padding:20px;background:linear-gradient(180deg,#08111a,#0c1822);overflow:auto}.screen.active{display:grid}.card{width:min(500px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px}.card h1{font-size:26px;margin:0 0 8px}.card h2{font-size:20px;margin:0 0 10px}.card p{margin:0 0 16px;color:var(--muted);font-size:14px;line-height:1.45}.field{margin:12px 0}.field label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px}.field input{width:100%;padding:13px 14px;border-radius:12px;border:1px solid var(--line);background:#0b141d;color:#fff;outline:none;font-weight:700}.big,.alt,.modebtn{width:100%;border-radius:13px;padding:13px 14px;font-weight:800}.big{border:0;background:var(--accent);color:#031018;font-size:17px}.alt,.modebtn{border:1px solid var(--line);background:#13212d;color:#eef6fb;margin-top:9px}.modebtn{text-align:left}.modebtn b{display:block}.modebtn span{display:block;color:var(--muted);font-size:11px;margin-top:3px}.modebtn.sel{outline:2px solid var(--accent)}.resume{border:1px solid #35556d;background:#0d1a24;border-radius:14px;padding:14px;margin:12px 0}.small{font-size:11px;color:var(--muted)}#captureUi{position:absolute;inset:0;display:none;pointer-events:none}#captureUi.active{display:block}.info{position:absolute;top:14px;left:14px;right:14px;display:flex;justify-content:space-between;gap:8px}.pill{background:rgba(7,12,17,.82);border:1px solid #33516a;border-radius:10px;padding:8px 10px;font-size:12px}.stationPill{position:absolute;top:14px;left:50%;transform:translateX(-50%)}.target{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:150px;height:150px;border:4px solid rgba(255,255,255,.92);border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.35)}.target.good{border-color:var(--ok);box-shadow:0 0 0 5px rgba(89,227,154,.2),0 0 30px rgba(89,227,154,.35)}.guide{position:absolute;left:14px;right:14px;bottom:24px;text-align:center;background:rgba(7,12,17,.84);border:1px solid #33516a;border-radius:14px;padding:12px}.guide .main{font-size:18px;font-weight:900}.guide .sub{font-size:12px;color:var(--muted);margin-top:5px}footer{padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:#0b1218;border-top:1px solid #1d2c37}.actions{display:none;grid-template-columns:1fr 1fr;gap:8px}.actions.active{display:grid}.actions button{min-width:0;border:1px solid #2c4357;background:#152431;color:#eaf4fb;border-radius:10px;padding:11px 8px;font-weight:800;font-size:13px}.actions .primaryAction{background:#17384d;border-color:#3f789d}.overlayCard{position:absolute;left:12px;right:12px;top:88px;z-index:35;background:rgba(9,20,29,.96);border:1px solid #35556d;border-radius:12px;padding:9px 10px;pointer-events:auto}.overlayBtns{display:flex;gap:6px;margin-top:7px}.overlayBtns button{flex:1;border-radius:9px;padding:8px 7px;font-weight:800;font-size:12px}.stationNameLine{margin:10px 0}.stationNameLine input{width:100%;padding:11px 12px;border-radius:11px;border:1px solid var(--line);background:#0b141d;color:#fff;font-weight:700}.finishModal{display:none;position:absolute;inset:0;z-index:60;background:rgba(2,6,10,.82);place-items:center;padding:18px;pointer-events:auto}.finishModal.active{display:grid}.finishModal .box{width:min(420px,100%);background:#101b24;border:1px solid #35556d;border-radius:16px;padding:18px;text-align:center}.finishModal .box h3{margin:0 0 8px}.finishModal .box p{color:var(--muted);font-size:13px;line-height:1.45}.finishModal .box button{width:100%;margin-top:8px;border-radius:11px;padding:11px;font-weight:900}#status{font-size:11px;color:var(--muted);margin-top:8px;text-align:center;min-height:16px}#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}#flash.on{animation:f .22s ease}@keyframes f{0%{opacity:0}30%{opacity:.8}100%{opacity:0}}
+</style></head><body><div id="app"><header><div class="logo">L</div><div class="brand"><b>LUNARU Capture</b><span>Съёмка панорамы 360°</span></div></header><main><video id="video" playsinline autoplay muted></video><canvas id="canvas" hidden></canvas>
+<section id="home" class="screen active"><div class="card"><h1>LUNARU Capture</h1><div id="resumeWrap" style="display:none"><div class="resume"><b>Незавершённая съёмка</b><div id="resumeText" class="small"></div></div><button id="resumeBtn" class="big">ПРОДОЛЖИТЬ СЪЁМКУ</button></div><button id="newBtn" class="alt">Новый объект</button></div></section>
+<section id="newObject" class="screen"><div class="card"><h2>Новый объект</h2><div class="field"><label>Название объекта</label><input id="objectName" placeholder="Можно оставить пустым"></div><p class="small">Если название не задано, LUNARU Capture присвоит его автоматически.</p><p>Где снимаем?</p><button class="modebtn" data-mode="outdoor-gps"><b>Улица · GPS</b><span>Если координаты доступны — сохраняем автоматически</span></button><button class="modebtn" data-mode="outdoor-no-gps"><b>Улица · без GPS</b><span>Станцию можно поставить на карту позже</span></button><button class="modebtn" data-mode="indoor"><b>Помещение</b><span>GPS не требуется</span></button><button id="createBtn" class="big" disabled style="margin-top:14px">НАЧАТЬ ОБЪЕКТ</button><button id="backBtn" class="alt">Назад</button></div></section>
+<section id="stationStart" class="screen"><div class="card"><h2 id="stationTitle">Станция 01</h2><p id="stationObject"></p><p id="stationMode" class="small"></p><div class="stationNameLine"><input id="stationName" placeholder="Место станции — например: Кухня (необязательно)"></div><div id="gpsLine" class="resume"></div>
+<div id="compatLine" class="small" style="margin:8px 0 10px;color:#a9b7c3">Проверка камеры…</div>
+<button id="startStationBtn" class="big">НАЧАТЬ СЪЁМКУ</button><button id="changeModeBtn" class="alt">Изменить режим</button><button id="finishObjectBtn" class="alt">Завершить объект</button></div></section>
+
+
+<div id="captureUi">
+  <div id="orientationNotice" style="display:none;position:absolute;inset:0;z-index:50;background:rgba(3,8,12,.92);place-items:center;text-align:center;padding:28px;pointer-events:none">
+    <div>
+      <div style="font-size:54px">↕️</div>
+      <div style="font-size:22px;font-weight:900;margin-top:8px">Держите телефон вертикально</div>
+      <div style="font-size:13px;color:#a9b7c3;margin-top:8px">Съёмка продолжится автоматически</div>
+    </div>
+  </div>
+
+  <div style="position:absolute;top:14px;left:14px;right:14px;display:grid;grid-template-columns:1fr auto 1fr;align-items:start;gap:8px">
+    <div class="pill" id="objectPill" style="justify-self:start;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Объект</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      <div class="pill" id="stationPill" style="font-weight:900">Станция 01</div>
+      <div class="pill" id="gpsPill">Координаты —</div>
+    </div>
+    <div class="pill" id="counter" style="justify-self:end">0 / 32</div>
+  </div>
+
+  <div id="target" class="target"></div>
+  <div id="directionArrow" style="position:absolute;left:50%;top:37%;transform:translate(-50%,-50%);font-size:54px;font-weight:900;text-shadow:0 2px 10px #000"></div>
+
+  <div id="geoPrompt" class="overlayCard" style="display:none;max-width:360px;margin:0 auto;left:10px;right:10px;top:86px">
+    <div id="geoPromptText" style="font-weight:900;font-size:13px">📍 Координаты появились</div>
+    <div style="font-size:11px;color:#a9b7c3;margin-top:2px">Вы сейчас на улице?</div>
+    <div class="overlayBtns">
+      <button id="geoUseBtn" style="border:0;background:#59e39a;color:#062016">Да, использовать</button>
+      <button id="geoIgnoreBtn" style="border:1px solid #35556d;background:#14222d;color:#fff">Нет</button>
+    </div>
+  </div>
+
+  <div class="guide">
+    <div id="guideMain" class="main">Держите телефон вертикально</div>
+    <div id="guideSub" class="sub">Первое направление станет началом станции</div>
+  </div>
+</div>
+<div id="finishStationModal" class="finishModal"><div class="box"><h3 id="finishStationTitle">Завершить станцию?</h3><p id="finishStationText"></p><button id="finishAnywayBtn" style="border:0;background:#49b8ff;color:#031018">ЗАВЕРШИТЬ И ПЕРЕЙТИ ДАЛЬШЕ</button><button id="continueStationBtn" style="border:1px solid #35556d;background:#152431;color:#fff">ДОСНЯТЬ</button></div></div><div id="flash"></div></main>
+<footer><div id="actions" class="actions"><button id="retakeBtn">Переснять</button><button id="manualBtn">Снять вручную</button><button id="finishStationBtn" class="primaryAction">Завершить станцию</button><button id="modeCaptureBtn">Изменить режим</button></div><div id="status">Готово к запуску</div></footer></div>
+<script>
+"use strict";
+const DB_NAME='lunaru_capture_media_v1';
+const DB_STORE='frames';
+function openMediaDb(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(DB_NAME,1);
+    req.onupgradeneeded=()=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains(DB_STORE)){
+        db.createObjectStore(DB_STORE,{keyPath:'id'});
+      }
+    };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function storeFrameBlob(blob,frameNo){
+  const db=await openMediaDb();
+  const tx=db.transaction(DB_STORE,'readwrite');
+  const store=tx.objectStore(DB_STORE);
+  const id=`${state.objectName}__S${pad(state.station)}__${pad(frameNo)}`;
+  store.put({
+    id,
+    objectName:state.objectName,
+    station:state.station,
+    frame:frameNo,
+    blob,
+    savedAt:new Date().toISOString()
+  });
+  await new Promise((resolve,reject)=>{
+    tx.oncomplete=resolve;
+    tx.onerror=()=>reject(tx.error);
+    tx.onabort=()=>reject(tx.error);
+  });
+  db.close();
+}
+function checkVisualOrientation(){
+  const notice=$('orientationNotice');
+  if(!notice) return;
+  // Only show the notice when the browser is genuinely wide/landscape.
+  const landscape=window.innerWidth>window.innerHeight;
+  notice.style.display=landscape?'grid':'none';
+}
+window.addEventListener('resize',checkVisualOrientation);
+window.addEventListener('orientationchange',()=>setTimeout(checkVisualOrientation,150));
+
+let geoCandidate=null,geoCandidateCount=0,geoPromptDismissed=false;
+function setCoordPill(txt,good=false){
+  const el=$('gpsPill'); if(!el) return;
+  el.textContent=txt;
+  el.style.borderColor=good?'#3e8c67':'#5b4b3f';
+  el.style.color=good?'#9af0bd':'#ffd5ad';
+}
+function maybeOfferCoordinates(p){
+  if(!state || state.mode==='outdoor-gps' || geoPromptDismissed) return;
+  const acc=Math.round(p.coords.accuracy||9999);
+  if(acc>35) return;
+  geoCandidate={lat:p.coords.latitude,lon:p.coords.longitude,accuracy:p.coords.accuracy,time:new Date().toISOString()};
+  geoCandidateCount++;
+  if(geoCandidateCount<2) return;
+  $('geoPromptText').textContent=`📍 Координаты появились · ±${acc} м`;
+  $('geoPrompt').style.display='block';
+}
+const $=id=>document.getElementById(id),KEY='lunaru_capture_v013';let stream=null,started=false,current=0,shots=[],lastAngles=null,stableSince=0,autoLock=false,selectedMode=null,state=null,baseYaw=null;const targets=[];
+for(let i=0;i<12;i++)targets.push({yawOffset:i*30,pitch:0,label:'Горизонт'});
+for(let i=0;i<8;i++)targets.push({yawOffset:i*45,pitch:45,label:'Верхний ряд'});
+for(let i=0;i<8;i++)targets.push({yawOffset:i*45,pitch:-45,label:'Нижний ряд'});
+targets.push({pitch:82,label:'Потолок 1',verticalOnly:true},{pitch:82,label:'Потолок 2',verticalOnly:true},{pitch:-82,label:'Пол 1',verticalOnly:true},{pitch:-82,label:'Пол 2',verticalOnly:true});
+function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));$(id).classList.add('active')}function save(){if(state)localStorage.setItem(KEY,JSON.stringify(state))}function load(){try{return JSON.parse(localStorage.getItem(KEY)||'null')}catch(e){return null}}function pad(n){return String(n).padStart(2,'0')}
+function autoObjectName(){
+  const d=new Date();
+  return `Объект_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+}function norm(v){v%=360;if(v<0)v+=360;return v}function diff(a,b){let d=norm(a)-norm(b);if(d>180)d-=360;if(d<-180)d+=360;return d}function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function refreshHome(){const s=load();if(s&&!s.objectFinished){$('resumeWrap').style.display='block';$('resumeText').textContent=`${s.objectName} · Станция ${pad(s.station)} · ${s.currentFrame}/${targets.length} кадров`}else $('resumeWrap').style.display='none'}refreshHome();
+document.querySelectorAll('.modebtn').forEach(b=>b.onclick=()=>{selectedMode=b.dataset.mode;document.querySelectorAll('.modebtn').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');$('createBtn').disabled=!selectedMode});$('objectName').oninput=()=>{$('createBtn').disabled=!selectedMode};$('newBtn').onclick=()=>show('newObject');$('backBtn').onclick=()=>show('home');
+$('createBtn').onclick=()=>{
+if(state && !state.objectFinished && $('createBtn').textContent==='СОХРАНИТЬ РЕЖИМ'){
+  state.objectName=$('objectName').value.trim()||state.objectName||autoObjectName();
+  state.mode=selectedMode; state.gps=null; save();
+  $('createBtn').textContent='НАЧАТЬ ОБЪЕКТ';
+  openStation(); $('startStationBtn').textContent=(state.currentFrame||0)>0?'ПРОДОЛЖИТЬ СЪЁМКУ':'НАЧАТЬ СЪЁМКУ'; return;
+}
+state={objectName:$('objectName').value.trim()||autoObjectName(),mode:selectedMode,station:1,stationName:'',currentFrame:0,shots:[],completedStations:[],objectFinished:false,gps:null,createdAt:new Date().toISOString()};save();openStation()
+};$('resumeBtn').onclick=()=>{state=load();state.completedStations=state.completedStations||[];state.stationName=state.stationName||'';current=state.currentFrame||0;shots=state.shots||[];openStation()};
+
+let gpsWatchId=null;
+function stopGpsWatch(){
+  if(gpsWatchId!==null && navigator.geolocation){
+    navigator.geolocation.clearWatch(gpsWatchId);
+    gpsWatchId=null;
+  }
+}
+function startGpsWatch(){
+  stopGpsWatch();
+  geoCandidate=null; geoCandidateCount=0; geoPromptDismissed=false;
+  if(!navigator.geolocation){
+    setCoordPill('Координаты нет',false);
+    return;
+  }
+  if(state.mode==='outdoor-gps') setCoordPill('Координаты: поиск…',false);
+  else if(state.mode==='indoor') setCoordPill('Помещение',true);
+  else setCoordPill('Без координат',true);
+
+  gpsWatchId=navigator.geolocation.watchPosition(
+    p=>{
+      const acc=Math.round(p.coords.accuracy||9999);
+      if(state.mode==='outdoor-gps'){
+        state.gps={lat:p.coords.latitude,lon:p.coords.longitude,accuracy:p.coords.accuracy,time:new Date().toISOString()};
+        save();
+        setCoordPill(`Координаты ✓ ±${acc} м`,true);
+      }else{
+        maybeOfferCoordinates(p);
+      }
+    },
+    ()=>{
+      if(state.mode==='outdoor-gps') setCoordPill('Координаты нет',false);
+    },
+    {enableHighAccuracy:true,maximumAge:3000,timeout:7000}
+  );
+}
+
+function openStation(){
+  $('stationTitle').textContent=`Станция ${pad(state.station)}`;
+  $('startStationBtn').textContent=(state.currentFrame||0)>0?'ПРОДОЛЖИТЬ СЪЁМКУ':'НАЧАТЬ СЪЁМКУ';
+  $('stationObject').textContent=state.objectName;
+  $('stationName').value=state.stationName||'';
+  const modeNames={'outdoor-gps':'Улица · GPS','outdoor-no-gps':'Улица · без GPS','indoor':'Помещение'};
+  $('stationMode').textContent=modeNames[state.mode]||'';
+  show('stationStart');
+  if(state.mode==='outdoor-gps'){
+    $('gpsLine').textContent='Координаты: определяю…';
+    if(navigator.geolocation)navigator.geolocation.getCurrentPosition(p=>{
+      state.gps={lat:p.coords.latitude,lon:p.coords.longitude,accuracy:p.coords.accuracy,time:new Date().toISOString()};save();
+      $('gpsLine').textContent=`Координаты получены · точность ±${Math.round(p.coords.accuracy)} м`;
+    },()=>{$('gpsLine').textContent='Координаты недоступны · можно снимать без них'},{enableHighAccuracy:true,timeout:7000,maximumAge:0});
+  }else if(state.mode==='outdoor-no-gps') $('gpsLine').textContent='Без координат · станцию можно поставить на карту позже';
+  else $('gpsLine').textContent='Помещение · координаты не требуются';
+}
+$('stationName').addEventListener('input',()=>{if(state){state.stationName=$('stationName').value.trim();save();}});
+
+async function tryPortraitLock(){
+  try{
+    if(screen.orientation && typeof screen.orientation.lock==='function'){
+      await screen.orientation.lock('portrait');
+    }
+  }catch(e){}
+}
+
+async function orientPermission(){try{if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function")return(await DeviceOrientationEvent.requestPermission())==='granted';return true}catch(e){return false}}
+$('changeModeBtn').onclick=()=>{
+  selectedMode=state.mode;
+  $('objectName').value=state.objectName||'';
+  document.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('sel',x.dataset.mode===selectedMode));
+  $('createBtn').disabled=false;
+  $('createBtn').textContent='СОХРАНИТЬ РЕЖИМ';
+  show('newObject');
+};
+
+function compatSummary(){
+  const secure=window.isSecureContext===true;
+  const media=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+  const proto=location.protocol;
+  const motion=('DeviceOrientationEvent' in window);
+  const bits=[
+    `Камера API ${media?'✓':'✕'}`,
+    `Датчики ${motion?'✓':'✕'}`,
+    `Контекст ${secure?'✓':'✕'}`,
+    proto==='file:'?'локальный файл':'веб'
+  ];
+  if($('compatLine')) $('compatLine').textContent=bits.join(' · ');
+  return {secure,media,proto,motion};
+}
+async function openCameraRedmiSafe(){
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){
+    throw new Error('Camera API недоступен в этом режиме Chrome');
+  }
+  let firstErr=null;
+  try{
+    return await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}},audio:false
+    });
+  }catch(e){
+    firstErr=e;
+  }
+  try{
+    // Второй проход специально максимально простой для бюджетных Android.
+    return await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+  }catch(e2){
+    const err=new Error(e2?.message||firstErr?.message||'Permission denied');
+    err.name=e2?.name||firstErr?.name||'CameraError';
+    err.firstError=firstErr?.name||'';
+    throw err;
+  }
+}
+function explainCameraError(e){
+  const name=e?.name||'';
+  const msg=e?.message||String(e||'');
+  if(name==='NotAllowedError'||/permission|denied/i.test(msg)){
+    if(location.protocol==='file:'){
+      return 'Chrome запретил камеру для локального HTML. Разрешения Android включены, но file:// всё равно блокируется. Нужен запуск LUNARU Capture по HTTPS.';
+    }
+    return 'Доступ к камере запрещён браузером. Разрешите камеру для этого сайта.';
+  }
+  if(name==='NotFoundError') return 'Камера не найдена.';
+  if(name==='NotReadableError') return 'Камера занята другим приложением или системой.';
+  if(name==='OverconstrainedError') return 'Эта камера не поддерживает запрошенный режим.';
+  return `Камера не открылась: ${name?name+': ':''}${msg}`;
+}
+
+$('startStationBtn').onclick=async()=>{
+  state.stationName=$('stationName').value.trim();save();
+  compatSummary();
+  $('status').textContent='Открываю камеру…';
+  await tryPortraitLock();
+  await orientPermission();
+  try{
+    stream=await openCameraRedmiSafe();
+    $('video').srcObject=stream;
+    await $('video').play();
+    current=state.currentFrame||0;
+    shots=state.shots||[];
+    baseYaw=Number.isFinite(state.baseYaw)?state.baseYaw:null;
+    started=true;
+    document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
+    $('captureUi').classList.add('active');
+    $('actions').classList.add('active');
+    $('objectPill').textContent=state.objectName;
+    $('stationPill').textContent=`Станция ${pad(state.station)}`;
+    startGpsWatch();checkVisualOrientation();render();
+    $('status').textContent='Камера открыта ✓';
+  }catch(e){
+    started=false;
+    $('status').textContent=explainCameraError(e);
+    if($('compatLine')){
+      const c=compatSummary();
+      $('compatLine').textContent += ` · ошибка ${e?.name||'CameraError'}`;
+      if(c.proto==='file:') $('compatLine').style.color='#ffbd73';
+    }
+  }
+};
+function render(){
+  $('counter').textContent=`${current} / ${targets.length}`;
+  const t=targets[current];
+  if(!t){
+    $('guideMain').textContent='Станция готова ✓';
+    $('guideSub').textContent='Нажмите «Завершить станцию»';
+    $('directionArrow').textContent='✓';
+    $('target').classList.add('good');
+    return;
+  }
+  $('target').classList.remove('good');
+  $('directionArrow').textContent='';
+  if(t.verticalOnly){
+    $('guideMain').textContent=t.pitch>0?'Направьте телефон вверх':'Направьте телефон вниз';
+    $('guideSub').textContent=`${t.label} · азимут не важен`;
+  }else if(baseYaw===null){
+    $('guideMain').textContent='Держите телефон вертикально';
+    $('guideSub').textContent='Фиксирую первое направление…';
+  }else{
+    $('guideMain').textContent=t.label;
+    $('guideSub').textContent=`Кадр ${current+1} из ${targets.length}`;
+  }
+  stableSince=0;autoLock=false;
+}
+
+function onOrientation(e){
+  if(!started||!targets[current])return;
+  const yaw=norm(e.webkitCompassHeading ?? (360-(e.alpha||0)));
+  const beta=Number.isFinite(e.beta)?e.beta:0;
+  const pitch=clamp(beta-90,-90,90);
+  lastAngles={yaw,pitch};
+  const t=targets[current];
+
+  // Потолок/пол: около зенита азимут нестабилен, поэтому учитываем только наклон.
+  if(t.verticalOnly){
+    const dp=pitch-t.pitch;
+    const pitchOk=Math.abs(dp)<10;
+    $('target').classList.toggle('good',pitchOk);
+    if(pitchOk){
+      $('directionArrow').textContent='✓';
+      $('guideMain').textContent='Держите неподвижно…';
+      $('guideSub').textContent='Снимаю автоматически';
+      if(!stableSince)stableSince=performance.now();
+      if(performance.now()-stableSince>700&&!autoLock){autoLock=true;shoot(true);}
+    }else{
+      stableSince=0;autoLock=false;
+      $('directionArrow').textContent=dp<0?'↑':'↓';
+      $('guideMain').textContent=t.pitch>0?'Направьте телефон вверх':'Направьте телефон вниз';
+      $('guideSub').textContent='Поворачиваться влево/вправо не нужно';
+    }
+    return;
+  }
+
+  // Первое горизонтальное направление станции становится локальным нулём.
+  if(baseYaw===null){
+    if(Math.abs(pitch)>18){
+      $('guideMain').textContent=pitch>0?'Опустите телефон немного':'Поднимите телефон немного';
+      $('guideSub').textContent='Сначала держите телефон вертикально';
+      $('directionArrow').textContent=pitch>0?'↓':'↑';
+      return;
+    }
+    baseYaw=yaw; state.baseYaw=baseYaw; save();
+    $('status').textContent='Начальное направление станции зафиксировано';
+  }
+  const targetYaw=norm(baseYaw+t.yawOffset);
+  const dy=diff(yaw,targetYaw), dp=pitch-t.pitch;
+  const yawOk=Math.abs(dy)<7, pitchOk=Math.abs(dp)<7, good=yawOk&&pitchOk;
+  $('target').classList.toggle('good',good);
+  if(good){
+    $('directionArrow').textContent='✓';$('guideMain').textContent='Держите неподвижно…';$('guideSub').textContent='Снимаю автоматически';
+    if(!stableSince)stableSince=performance.now();
+    if(performance.now()-stableSince>650&&!autoLock){autoLock=true;shoot(true);}return;
+  }
+  stableSince=0;autoLock=false;
+  if(!pitchOk){
+    $('directionArrow').textContent=dp<0?'↑':'↓';$('guideMain').textContent=dp<0?'Поднимите телефон':'Опустите телефон';
+  }else if(!yawOk){
+    $('directionArrow').textContent=dy<0?'→':'←';$('guideMain').textContent=dy<0?'Повернитесь вправо':'Повернитесь влево';
+  }
+  $('guideSub').textContent=`Кадр ${current+1} из ${targets.length}`;
+}
+
+window.addEventListener('deviceorientation',onOrientation,true);
+async function shoot(auto){if(!started||!targets[current])return;const v=$('video'),c=$('canvas');c.width=v.videoWidth||1280;c.height=v.videoHeight||720;c.getContext('2d').drawImage(v,0,0,c.width,c.height);const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));if(!blob)return;shots[current]={index:current+1,time:new Date().toISOString(),target:{...targets[current],yaw:(targets[current].verticalOnly||baseYaw===null)?null:norm(baseYaw+targets[current].yawOffset)},angles:lastAngles,auto};await storeFrameBlob(blob,current+1);$('flash').classList.remove('on');void $('flash').offsetWidth;$('flash').classList.add('on');current++;state.currentFrame=current;state.shots=shots;save();$('status').textContent=`Кадр ${current} сохранён в станции${auto?' автоматически':''}`;render()}
+$('retakeBtn').onclick=()=>{
+  if(current<=0){$('status').textContent='Ещё нечего переснимать';return}
+  current--;shots=shots.slice(0,current);state.currentFrame=current;state.shots=shots;save();
+  $('status').textContent=`Переснятие кадра ${current+1}`;render();
+};
+$('manualBtn').onclick=()=>{if(!started){return}$('status').textContent='Ручной кадр…';shoot(false);};
+function stopCaptureToStation(){
+  started=false;if(stream)stream.getTracks().forEach(t=>t.stop());stopGpsWatch();
+  state.currentFrame=current;state.shots=shots;save();
+  $('captureUi').classList.remove('active');$('actions').classList.remove('active');
+}
+function archiveCurrentStation(reason='completed'){
+  state.completedStations=state.completedStations||[];
+  const record={station:state.station,name:state.stationName||'',shots:[...shots],gps:state.gps||null,mode:state.mode,baseYaw:state.baseYaw??baseYaw??null,frames:current,totalFrames:targets.length,status:reason,completedAt:new Date().toISOString()};
+  const ix=state.completedStations.findIndex(s=>s.station===state.station);
+  if(ix>=0)state.completedStations[ix]=record;else state.completedStations.push(record);
+}
+function goNextStation(reason='completed'){
+  archiveCurrentStation(reason);
+  state.station=(state.station||1)+1;state.stationName='';state.currentFrame=0;state.shots=[];state.gps=null;state.baseYaw=null;
+  current=0;shots=[];baseYaw=null;save();openStation();$('status').textContent=`Станция ${pad(state.station)} готова к съёмке`;
+}
+$('finishStationBtn').onclick=()=>{
+  if(current>=targets.length){stopCaptureToStation();goNextStation('completed');return;}
+  const missing=targets.length-current;
+  $('finishStationTitle').textContent='Станция ещё не полностью снята';
+  $('finishStationText').textContent=`Осталось ${missing} кадр${missing===1?'':missing<5?'а':'ов'}. Можно доснять или сохранить станцию как незавершённую и перейти дальше.`;
+  $('finishStationModal').classList.add('active');
+};
+$('continueStationBtn').onclick=()=>{$('finishStationModal').classList.remove('active');};
+$('finishAnywayBtn').onclick=()=>{$('finishStationModal').classList.remove('active');stopCaptureToStation();goNextStation('incomplete');};
+$('modeCaptureBtn').onclick=()=>{
+  state.currentFrame=current;state.shots=shots;save();stopCaptureToStation();
+  selectedMode=state.mode;$('objectName').value=state.objectName||'';
+  document.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('sel',x.dataset.mode===selectedMode));
+  $('createBtn').disabled=false;$('createBtn').textContent='СОХРАНИТЬ РЕЖИМ';show('newObject');
+};
+$('finishObjectBtn').onclick=()=>{
+  state.stationName=$('stationName').value.trim();
+  if((state.currentFrame||0)>0 || (state.shots||[]).length){
+    current=state.currentFrame||0;shots=state.shots||[];archiveCurrentStation(current>=targets.length?'completed':'incomplete');
+  }
+  state.objectFinished=true;save();show('home');refreshHome();$('status').textContent='Объект завершён';
+};
+
+$('geoUseBtn').onclick=()=>{
+  if(!geoCandidate) return;
+  state.gps=geoCandidate; state.positionMode='gps'; save();
+  geoPromptDismissed=true;$('geoPrompt').style.display='none';
+  setCoordPill(`Координаты ✓ ±${Math.round(geoCandidate.accuracy)} м`,true);
+  $('status').textContent='Координаты сохранены только для этой станции';
+};
+$('geoIgnoreBtn').onclick=()=>{
+  geoPromptDismissed=true;
+  $('geoPrompt').style.display='none';
+  $('status').textContent='Координаты для этой станции не используются';
+};
+</script></body></html>
