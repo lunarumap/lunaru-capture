@@ -47,7 +47,7 @@ const page=await context.newPage();
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 page.on('dialog',d=>d.accept());
 async function open(){await page.goto(base);await page.locator('#newBtn:enabled').waitFor();}
-async function setup(){await page.click('#startStationBtn');await page.locator('#cameraReview.active').waitFor();}
+async function setup(){await page.click('#startStationBtn');await page.locator('#cameraReview.active').waitFor();await page.locator('#confirmCameraBtn:enabled').waitFor();}
 async function start(){await setup();await page.click('#confirmCameraBtn');await page.locator('#captureUi.active').waitFor();}
 async function photo(){
   const before=await page.evaluate(()=>state.methods[state.activeMethod].revision);
@@ -67,14 +67,51 @@ async function exportZip(key){
   return {files,manifest:JSON.parse(strFromU8(files[manifestName])),file};
 }
 try{
-  await open();await page.click('#newBtn');await page.fill('#objectName','Redmi 9 bench');
+  await open();await page.click('#newBtn');await page.fill('#objectName','Mobile regressions');
+  await page.click('[data-mode="indoor"]');await page.click('#createBtn');
+  await page.evaluate(()=>{
+    const button=document.querySelector('#startStationBtn'), handler=button.onclick;
+    button.onclick=function(...args){window.inClick=true;try{return handler.apply(this,args);}finally{window.inClick=false;}};
+    DeviceOrientationEvent.requestPermission=()=>{window.permissionInClick=!!window.inClick;return Promise.resolve(window.inClick?'granted':'denied');};
+  });
+  await start();assert.equal(await page.evaluate(()=>window.permissionInClick),true);
+  await page.evaluate(async()=>{
+    baseYaw=state.baseYaw=state.methods.A.baseYaw=0;
+    for(let i=0;i<15;i++){
+      dispatchEvent(new DeviceOrientationEvent('deviceorientation',{alpha:360-(i%2?8:6),beta:90,gamma:0}));
+      await new Promise(r=>setTimeout(r,80));
+    }
+  });
+  assert.equal(await page.evaluate(()=>state.methods.A.shots.length),1,'Boundary jitter must allow one stable shot without advancing twice');
+  await page.evaluate(async()=>{
+    // Do not shoot just because a fast turn sweeps through the next target.
+    for(let yaw=10;yaw<=50;yaw+=2){
+      dispatchEvent(new DeviceOrientationEvent('deviceorientation',{alpha:360-yaw,beta:90,gamma:0}));
+      await new Promise(r=>setTimeout(r,25));
+    }
+  });
+  assert.equal(await page.evaluate(()=>state.methods.A.shots.length),1);
+  await page.waitForTimeout(400);
+  await page.evaluate(async()=>{
+    baseYaw=state.baseYaw=state.methods.A.baseYaw=329; // next target = 359°
+    for(let i=0;i<15;i++){
+      const yaw=[358,359,0,1][i%4];
+      dispatchEvent(new DeviceOrientationEvent('deviceorientation',{alpha:360-yaw,beta:90,gamma:0}));
+      await new Promise(r=>setTimeout(r,80));
+    }
+  });
+  assert.equal(await page.evaluate(()=>state.methods.A.shots.length),2,'North wrap must not reverse the guidance or skip a photo');
+  await stop();await page.click('#finishObjectBtn');await page.reload();await page.locator('#newBtn:enabled').waitFor();
+  await page.click('#newBtn');await page.fill('#objectName','Redmi 9 bench');
   await page.click('[data-mode="indoor"]');await page.click('#createBtn');
   await setup();assert.match(await page.textContent('#photoInfo'),/не полноразмерное/);
   assert.match(await page.textContent('#cameraInfo'),/640 × 480/);
   assert.equal(await page.evaluate(()=>cameraRequests[0].video.width.ideal),3840);
   await page.click('#confirmCameraBtn');
   for(let i=0;i<3;i++)await photo();
+  await page.evaluate(()=>{state.version='0.14.0';save();});
   await stop();await page.reload();await page.locator('#newBtn:enabled').waitFor();await resume();
+  assert.equal(await page.evaluate(()=>state.version),'0.14.0');
   assert.match(await page.textContent('[data-method="A"]'),/3\/32/);
   await start();for(let i=3;i<32;i++)await photo();
   assert.match(await page.textContent('#guideSub'),/Полнота сферы ещё не проверена/);
@@ -161,9 +198,56 @@ try{
       start(){throw new DOMException('Test encoder unavailable','NotSupportedError');}
     };
   });
-  await setup();await page.click('#confirmCameraBtn');await page.locator('#stationStart.active').waitFor();
+  await page.click('#startStationBtn');await page.locator('#startStationBtn:enabled').waitFor();
+  await page.locator('#stationStart.active').waitFor();
   assert.equal(await page.evaluate(()=>state.methods.C.videos.length),2);
   assert.match(await page.textContent('#status'),/encoder unavailable/);
+  await page.evaluate(()=>{window.MediaRecorder=window.originalRecorder;});
+
+  // Same asynchronous encoder error shown on Redmi, with no stop event.
+  // The probe must reject it and validate the lower mode on the SAME device.
+  await page.evaluate(()=>{
+    window.probeAttempts=0;window.probeOptions=[];
+    window.MediaRecorder=class extends window.originalRecorder {
+      constructor(stream,opts){super(stream,opts);window.probeOptions.push(opts);this.fail=++window.probeAttempts===1;}
+      start(...args){
+        if(!this.fail)return super.start(...args);
+        setTimeout(()=>this.onerror?.({error:new Error('The given encoder configuration is not supported by the encoder.')}),50);
+      }
+    };
+  });
+  await setup();
+  assert.ok(await page.evaluate(()=>window.probeAttempts>=2));
+  assert.match(await page.textContent('#photoInfo'),/записано и воспроизведено/);
+  assert.ok(await page.evaluate(()=>window.probeOptions.every(o=>!JSON.stringify(o).includes('42E01E') && !o.videoBitsPerSecond)));
+  await page.click('#confirmCameraBtn');await page.locator('#captureUi.active').waitFor();await page.waitForTimeout(1500);await stop();
+  assert.equal(await page.evaluate(()=>state.methods.C.videos.at(-1).status),'saved');
+  assert.ok(await page.evaluate(()=>state.methods.C.videos.at(-1).camera.recordingAttempts[0].error.includes('encoder configuration')));
+  await page.locator('[data-export="C"] button').filter({hasText:'▶'}).last().click();
+  await page.locator('#videoReview.active').waitFor();
+  await page.evaluate(()=>{const v=document.querySelector('#savedVideo');v.muted=true;return v.play();});
+  await page.waitForFunction(()=>document.querySelector('#savedVideo').currentTime>.2);
+  await page.waitForFunction(()=>document.querySelector('#playbackStatus').textContent.includes('воспроизводится'));
+  await page.click('#closeVideoReviewBtn');
+  await page.evaluate(()=>{window.MediaRecorder=window.originalRecorder;});
+
+  // An encoder can fail on the real start, even after a good probe. No permanent
+  // busy state or empty saved clip; bounded stop even if no stop event is delivered.
+  await setup();
+  const videosBefore=await page.evaluate(()=>state.methods.C.videos.length);
+  await page.evaluate(()=>{
+    window.MediaRecorder=class {
+      constructor(){this.state='inactive';this.mimeType='video/mp4';}
+      start(){this.state='recording';this.onstart?.();setTimeout(()=>{
+        this.state='inactive';this.onerror?.({error:new Error('Async start failure without stop event')});
+      },50);}
+      stop(){} requestData(){}
+    };
+  });
+  await page.click('#confirmCameraBtn');await page.locator('#stationStart.active').waitFor({timeout:12000});
+  assert.equal(await page.evaluate(()=>state.methods.C.videos.length),videosBefore);
+  assert.equal(await page.locator('#startStationBtn').isEnabled(),true);
+  assert.match(await page.textContent('#status'),/Async start failure/);
   await page.evaluate(()=>{window.MediaRecorder=window.originalRecorder;});
 
   // Reload during recording: preserve every already committed chunk; never call it complete.
@@ -183,7 +267,10 @@ try{
       'reload recovery','three ZIPs, original media sizes and metadata','exported video decoding',
       'quota failure does not advance','native photo actual dimensions','native failure needs explicit fallback confirmation',
       'reload during recording preserves committed chunks and marks interruption','second tab cannot overwrite active data',
-      'encoder start failure leaves no empty successful clip or stalled recorder'],
+      'encoder start failure leaves no empty successful clip or stalled recorder',
+      'iOS permission requested in click stack', 'jitter allows stable auto photo; fast turn does not; 359/0 wrap',
+      'async encoder error selects and decodes fallback without changing device',
+      'saved video plays in app', 'real start error without stop event recovers without empty clip'],
     artifacts:[A.file,B.file,C.file]};
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(e){

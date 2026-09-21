@@ -1,4 +1,4 @@
-/* TEST 0.14: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
+/* TEST 0.15: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
 /* global $, targets, state, current, shots, baseYaw, stream, started, lastAngles,
    stableSince, autoLock, selectedMode, show, save, refreshHome, openStation,
    shoot, render, onOrientation, stopGpsWatch, startGpsWatch, orientPermission,
@@ -6,7 +6,9 @@
    pad, norm, autoObjectName, fflate */
 "use strict";
 (() => {
-  const VERSION = '0.14.0', DATABASE = 'lunaru_capture_abc_v014';
+  const VERSION = '0.15.0', DATABASE = 'lunaru_capture_abc_v014';
+  const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide();
+  let videoOptions=null, playbackUrl=null, videoWriteError=null;
   const originalTargets = targets.map(t => ({...t}));
   const zigzag = Array.from({length:12}, (_, sector) =>
     (sector % 2 ? [-45,0,45] : [45,0,-45]).map(pitch => ({
@@ -25,7 +27,7 @@
   let db, writes=Promise.resolve(), projects=[], shooting=false, stopping=false;
   let retakeIndex=null, photoAPI=null, photoSettings={}, photoSource='video-frame';
   let recorder=null, activeVideo=null, videoWrites=Promise.resolve(), videoError=null, videoFlushTimer=null;
-  let videoStopped=null, videoChunks=0, videoClock=0, videoAccumulated=0;
+  let videoStopped=null, videoDetach=null, videoDidStart=false, videoChunks=0, videoClock=0, videoAccumulated=0;
   let lastSensor=null, sensorAllowed=false, wakeLock=null, guideDwell=0;
   let readyCamera=null, downloadBusy=false, guardTimer=null, reviewOpen=false;
   const urls=new Set();
@@ -167,6 +169,9 @@
       info.textContent=count ? `Сохранено на устройстве: ${summary(key)}. ${downloadText(m)}` : 'Материала пока нет.';
       const b=makeButton(`Скачать ${key} · ZIP`, 'alt',()=>exportSet(key));b.disabled=!count || downloadBusy;
       box.append(title,info,b);
+      if(key==='C')for(const v of m.videos.filter(v=>v.chunks>0)){
+        box.append(makeButton(`▶ Проверить ${v.filename}`, 'alt',()=>playSavedVideo(v)));
+      }
       if(m.download && m.download.revision===m.revision && !m.download.confirmed){
         box.append(makeButton('Файл вижу в «Загрузках»','alt',async()=>{
           state.methods[key].download.confirmed=true;await persist();renderExports();
@@ -175,6 +180,31 @@
       $('exportPanel').append(box);
     }
   }
+  async function videoBlob(v){
+    const parts=[];
+    for(let i=0;i<v.chunks;i++){
+      const chunk=await read('chunks',`${v.id}:${i}`);
+      if(!chunk?.blob)throw new Error('Не найдена часть видео. Сохранённые данные оставлены на месте.');
+      parts.push(chunk.blob);
+    }
+    return new Blob(parts,{type:v.mimeType});
+  }
+  async function playSavedVideo(v){
+    await writes;
+    if(playbackUrl)URL.revokeObjectURL(playbackUrl);
+    playbackUrl=URL.createObjectURL(await videoBlob(v));
+    const player=$('savedVideo');
+    $('videoReviewInfo').textContent=`${v.filename} · ${v.width} × ${v.height} · ${mb(v.bytes)}${v.status==='interrupted'?' · прерванная запись':''}`;
+    $('playbackStatus').textContent='Нажмите ▶ и проверьте изображение и движение.';
+    player.onerror=()=>{$('playbackStatus').textContent='Браузер не смог воспроизвести файл. Исходник сохранён; его можно скачать для проверки.';};
+    player.ontimeupdate=()=>{if(player.currentTime>0.2)$('playbackStatus').textContent='Видео воспроизводится. Проверьте весь проход, затем скачайте ZIP.';};
+    player.src=playbackUrl;show('videoReview');
+  }
+  $('closeVideoReviewBtn').onclick=safely(async()=>{
+    const player=$('savedVideo');player.pause();player.removeAttribute('src');player.load();
+    if(playbackUrl){URL.revokeObjectURL(playbackUrl);playbackUrl=null;}
+    await openStation();
+  });
   $('newBtn').onclick=()=>{
     selectedMode=null;$('objectName').value='';$('createBtn').textContent='НАЧАТЬ ОБЪЕКТ';
     $('createBtn').disabled=true;document.querySelectorAll('.modebtn').forEach(b=>b.classList.remove('sel'));show('newObject');
@@ -217,9 +247,42 @@
       return s;
     }catch(e){s.getTracks().forEach(t=>t.stop());throw e;}
   }
-  function selectVideoMime(){
-    if(!window.MediaRecorder)throw new Error('Этот браузер не поддерживает запись видео. Откройте в актуальном Chrome.');
-    return ['video/mp4;codecs=avc1.42E01E','video/webm;codecs=vp8','video/webm','video/mp4'].find(t=>MediaRecorder.isTypeSupported(t)) || '';
+  function cameraSnapshot(){
+    const track=stream.getVideoTracks()[0], settings=track.getSettings();
+    return {...settings,width:$('video').videoWidth||settings.width,height:$('video').videoHeight||settings.height,
+      label:track.label,requested:{width:3840,height:2160,frameRate:30,facingMode:'environment'},openedAt:now()};
+  }
+  async function prepareVideo(){
+    const options=support.recorderOptions(), attempts=[];
+    const track=stream.getVideoTracks()[0], initial=track.getSettings();
+    // One preferred codec at requested resolution, then a modest number of lower
+    // modes. All constraints apply to the SAME track before the pass starts.
+    const candidates=[{long:null,options:options[0]},
+      {long:1920,options:options[0]},
+      {long:1920,options:options[1]||{}},
+      {long:1280,options:{}}];
+    for(const candidate of candidates){
+      try{
+        if(candidate.long){
+          const portrait=initial.height>initial.width, short=Math.round(candidate.long*9/16);
+          await track.applyConstraints({width:{ideal:portrait?short:candidate.long,max:portrait?short:candidate.long},
+            height:{ideal:portrait?candidate.long:short,max:portrait?candidate.long:short},frameRate:{ideal:30,max:30}});
+          await support.delay(150);
+        }
+        const settings=track.getSettings();
+        if(initial.deviceId && settings.deviceId!==initial.deviceId)throw new Error('Изменился объектив.');
+        if(initial.zoom!=null && settings.zoom!=null && Math.abs(initial.zoom-settings.zoom)>.01)throw new Error('Изменился зум.');
+        $('cameraInfo').textContent=`Проверяю запись: ${formatCamera(cameraSnapshot())}`;
+        $('photoInfo').textContent='Короткая пробная запись и проверка воспроизведения. Она не входит в набор. Подождите несколько секунд…';
+        message(candidate.long ? `Проверяю доступный режим до ${candidate.long} px…` : 'Проверяю, может ли браузер записать видео…');
+        const verification=await support.probe(stream,candidate.options);
+        videoOptions=candidate.options;
+        readyCamera={...cameraSnapshot(),width:verification.width,height:verification.height,
+          recordingCheck:verification,recordingAttempts:attempts};
+        return;
+      }catch(e){attempts.push({limit:candidate.long,mimeType:candidate.options.mimeType||'browser-default',error:e.message});}
+    }
+    throw new Error(`Видео не запустилось ни в одном проверенном режиме. ${attempts.at(-1)?.error||''} Попробуйте открыть эту ссылку в обычном Safari на iPhone или Chrome на Android.`);
   }
   async function setupPhoto(){
     photoAPI=null;photoSource='video-frame';photoSettings={};
@@ -249,34 +312,36 @@
     $('captureUi').classList.remove('active');$('actions').classList.remove('active');
   }
   $('startStationBtn').onclick=safely(async()=>{
-    $('startStationBtn').disabled=true;
+    // iOS requires requestPermission in the click stack, before any await/IDB work.
+    const permission=orientPermission();
+    $('startStationBtn').disabled=true;$('confirmCameraBtn').disabled=true;$('cancelCameraBtn').disabled=true;
     try{
       message('Открываю заднюю камеру…');state.stationName=$('stationName').value.trim();await persist();
-      await tryPortraitLock();sensorAllowed=await orientPermission();
+      sensorAllowed=await permission;await tryPortraitLock();photoGuide.reset();
       stream=await openRearCamera();$('video').srcObject=stream;await $('video').play();
-      const track=stream.getVideoTracks()[0], settings=track.getSettings();
-      readyCamera={...settings,width:$('video').videoWidth,height:$('video').videoHeight,label:track.label,
-        requested:{width:3840,height:2160,frameRate:30,facingMode:'environment'},openedAt:now()};
+      readyCamera=cameraSnapshot();
       if(!readyCamera.width || !readyCamera.height)throw new Error('Камера не передаёт изображение.');
-      if(state.activeMethod==='C')selectVideoMime();else await setupPhoto();
       reviewOpen=true;show('cameraReview');$('reviewTitle').textContent=spec().title;
+      if(state.activeMethod==='C')await prepareVideo();else await setupPhoto();
       $('cameraInfo').textContent=`Задняя камера · фактически ${formatCamera(readyCamera)}`;
       $('photoInfo').textContent=state.activeMethod==='C'
-        ? `Запрошено 4K (3840 × 2160). ${Math.max(readyCamera.width,readyCamera.height)<3840 ? '4K не получено: будет записан показанный выше доступный режим.' : 'Камера предоставила 4K.'} Формат: ${selectVideoMime() || 'выберет браузер'}. Исходный файл, без звука.`
+        ? `Запрошено 4K (3840 × 2160). ${Math.max(readyCamera.width,readyCamera.height)<3840 ? '4K не получено для записи: будет использован показанный выше проверенный режим.' : '4K прошло проверку записи.'} Короткое видео записано и воспроизведено. Формат: ${readyCamera.recordingCheck.mimeType}. Без звука.`
         : photoDescription();
       $('confirmCameraBtn').textContent=state.activeMethod==='C' ? 'НАЧАТЬ ЗАПИСЬ ВИДЕО' : 'НАЧАТЬ ФОТОСЪЁМКУ';
       await navigator.storage?.persist?.().catch(()=>false);
       updateSensorText();message('Проверьте параметры перед началом.');
-    }catch(e){await releaseCamera();message(explainCameraError(e));throw e;}
-    finally{$('startStationBtn').disabled=false;}
+    }catch(e){await releaseCamera();await openStation();throw e;}
+    finally{$('startStationBtn').disabled=false;$('confirmCameraBtn').disabled=false;$('cancelCameraBtn').disabled=false;}
   });
   $('cancelCameraBtn').onclick=safely(async()=>{await releaseCamera();await openStation();});
   $('confirmCameraBtn').onclick=safely(async()=>{
-    $('confirmCameraBtn').disabled=true;
+    $('confirmCameraBtn').disabled=true;$('cancelCameraBtn').disabled=true;
     try{
+      photoGuide.reset();
       if(!stream)throw new Error('Камера закрыта. Откройте её снова.');
       method().camera={...readyCamera};method().photoSource=photoSource;method().photoRequest=clone(photoSettings);
       method().finished=false;await persist();mirror();reviewOpen=false;
+      if(state.activeMethod==='C'){message('Запускаю запись и ожидаю первые сохранённые данные…');await startVideo();}
       document.querySelectorAll('.screen').forEach(el=>el.classList.remove('active'));
       $('captureUi').classList.add('active');$('actions').classList.add('active');
       $('objectPill').textContent=state.objectName;$('stationPill').textContent=`S01-${state.activeMethod}`;
@@ -285,16 +350,19 @@
       $('retakeBtn').textContent=state.activeMethod==='C' ? 'Пауза видео' : 'Переснять последний';
       $('manualBtn').textContent=state.activeMethod==='C' ? 'Следующее направление' : 'Снять вручную';
       $('finishStationBtn').textContent='Завершить способ';
-      if(state.activeMethod==='C')await startVideo();
       started=true;stopping=false;startGpsWatch();checkVisualOrientation();render();
       try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}
       clearInterval(guardTimer);guardTimer=setInterval(safely(checkCamera),1000);
       message('Снимайте с одной точки. Сохранённое покрытие проверим при сшивке.');
-    }catch(e){await releaseCamera();await openStation();throw e;}
-    finally{$('confirmCameraBtn').disabled=false;}
+    }catch(e){
+      if(recorder){try{await stopVideo();}catch{}}
+      await releaseCamera();await openStation();throw e;
+    }
+    finally{$('confirmCameraBtn').disabled=false;$('cancelCameraBtn').disabled=false;}
   });
   async function checkCamera(){
     if(!stream || stopping)return;
+    if(started && recorder?.state==='inactive' && !videoError)videoError=new Error('Браузер прервал запись видео.');
     if(recorder && videoError){await stopPass(false);return;}
     const t=stream.getVideoTracks()[0], c=t.getSettings(), initial=method().camera;
     if(t.readyState==='ended' || (initial.deviceId && c.deviceId!==initial.deviceId) ||
@@ -303,12 +371,19 @@
     }
   }
   function updateSensorText(){
-    const text=sensorLive() ? 'Датчики работают · направление приблизительное' : 'Датчики не передают ориентацию · ручная съёмка по подсказкам';
+    const text=sensorLive() ? 'Датчики работают · автоподсказки включены' : state.activeMethod==='C'
+      ? 'Нет данных ориентации · направление меняйте кнопкой; запись видео работает независимо'
+      : 'Нет данных ориентации · наведите телефон по подсказке и нажмите «Снять вручную»';
+    for(const id of ['sensorReviewBtn','sensorCaptureBtn'])$(id).hidden=!!sensorLive() || typeof window.DeviceOrientationEvent?.requestPermission!=='function';
     $('sensorInfo').textContent=text;$('captureSensors').textContent=text;
     if(started && !sensorLive()){
-      stableSince=0;autoLock=false;guideDwell=0;manualGuide();
+      stableSince=0;autoLock=false;guideDwell=0;photoGuide.reset();manualGuide();
     }
   }
+  for(const id of ['sensorReviewBtn','sensorCaptureBtn'])$(id).onclick=safely(async()=>{
+    const permission=orientPermission();sensorAllowed=await permission;photoGuide.reset();updateSensorText();
+    message(sensorAllowed?'Доступ к датчикам разрешён. Плавно поверните телефон.':'Доступ не получен. Откройте ссылку в Safari/Chrome и разрешите датчики; ручная съёмка доступна.');
+  });
   function manualGuide(){
     const t=targets[current];if(!t)return;
     $('guideMain').textContent=t.label;
@@ -318,7 +393,7 @@
   const originalRender=render;
   render=()=>{
     if(!state)return;
-    originalRender();
+    originalRender();photoGuide.reset();
     const m=method();
     $('counter').textContent=state.activeMethod==='C' ? duration(videoElapsed()) : `${m.shots.filter(Boolean).length} / ${targets.length}`;
     if(retakeIndex!=null)$('guideSub').textContent=`Переснять кадр ${retakeIndex+1}. Старый снимок сохранён до замены.`;
@@ -332,6 +407,29 @@
       ? `Видео записывается частями на устройство; сохранено ${duration(activeVideo?.savedMs||0)}`
       : `На устройстве: ${m.shots.filter(Boolean).length} кадров`;
   };
+  function guidePhoto(){
+    const t=targets[current];if(!t || !sensorLive())return;
+    if(baseYaw===null && !t.verticalOnly){
+      if(Math.abs(lastAngles.pitch)>18){
+        $('guideMain').textContent='Сначала направьте камеру на горизонт';
+        $('directionArrow').textContent=lastAngles.pitch>0?'↓':'↑';return;
+      }
+      baseYaw=lastAngles.yaw;state.baseYaw=baseYaw;method().baseYaw=baseYaw;save();
+    }
+    const guide=photoGuide.sample(lastAngles,{...t,yaw:norm((baseYaw||0)+t.yawOffset)},current,performance.now());
+    $('target').classList.toggle('good',guide.good);
+    if(guide.good){
+      $('directionArrow').textContent='✓';$('guideMain').textContent='Замрите на мгновение';
+      $('guideSub').textContent=`Автоснимок · ${current+1}/${targets.length}`;
+      if(guide.ready && !autoLock){autoLock=true;shoot(true);}
+    }else{
+      autoLock=false;
+      const vertical=t.verticalOnly || Math.abs(guide.dp)>=7;
+      $('directionArrow').textContent=vertical ? (guide.dp<0?'↑':'↓') : (guide.dy<0?'→':'←');
+      $('guideMain').textContent=t.label;
+      $('guideSub').textContent=vertical ? (guide.dp<0?'Плавно поднимите телефон':'Плавно опустите телефон') : (guide.dy<0?'Плавно повернитесь вправо':'Плавно повернитесь влево');
+    }
+  }
   const originalOrientation=onOrientation;
   window.removeEventListener('deviceorientation',originalOrientation,true);
   window.addEventListener('deviceorientation',e=>{
@@ -340,7 +438,7 @@
     lastSensor={alpha:e.alpha,beta:e.beta,gamma:e.gamma,heading,absolute:e.absolute===true,time:now(),received:performance.now()};
     lastAngles={yaw:norm(heading ?? (360-e.alpha)),pitch:Math.max(-90,Math.min(90,e.beta-90))};
     if(!started || stopping || shooting || retakeIndex!=null || window.innerWidth>window.innerHeight)return;
-    if(state.activeMethod!=='C'){originalOrientation(e);return;}
+    if(state.activeMethod!=='C'){guidePhoto();return;}
     if(!recorder || recorder.state!=='recording')return;
     const t=targets[current];if(!t)return;
     if(baseYaw===null){
@@ -360,7 +458,7 @@
   setInterval(()=>{
     if(reviewOpen || started)updateSensorText();
     if(started && state.activeMethod==='C'){
-      $('counter').textContent=duration(videoElapsed());
+      $('counter').textContent=`${recorder?.state==='paused'?'ПАУЗА':'● REC'} ${duration(videoElapsed())}`;
       $('durableStatus').textContent=`${recorder?.state==='paused' ? 'Пауза · ' : ''}Сохранено на устройстве: ${duration(activeVideo?.savedMs||0)}. Перед закрытием — «Остановить и сохранить».`;
     }
   },500);
@@ -421,52 +519,61 @@
   });
   function videoElapsed(){return videoAccumulated+(videoClock?performance.now()-videoClock:0);}
   async function startVideo(){
-    const mimeType=selectVideoMime();
-    recorder=new MediaRecorder(stream,{...(mimeType?{mimeType}:{}),videoBitsPerSecond:20000000});
-    const actualMime=recorder.mimeType||mimeType||'video/webm';
+    if(!videoOptions)throw new Error('Сначала выполните проверку записи.');
+    recorder=new MediaRecorder(stream,videoOptions);
+    const currentRecorder=recorder, actualMime=recorder.mimeType||videoOptions.mimeType||readyCamera.recordingCheck.mimeType;
     activeVideo={id:stamp(),filename:`video_${pad(method().videos.length+1)}.${actualMime.includes('mp4')?'mp4':'webm'}`,
       method:'C',time:now(),width:readyCamera.width,height:readyCamera.height,frameRate:readyCamera.frameRate,
       mimeType:actualMime,bitsPerSecond:recorder.videoBitsPerSecond,audio:false,camera:clone(readyCamera),
       chunks:0,bytes:0,savedMs:0,status:'recording',guideStart:current};
     const videoId=activeVideo.id;
-    method().videos.push(clone(activeVideo));method().revision++;await persist();
-    videoWrites=Promise.resolve();videoChunks=0;videoError=null;videoAccumulated=0;videoClock=performance.now();
-    videoStopped=new Promise(resolve=>{recorder.onstop=resolve;});
-    recorder.ondataavailable=e=>{
-      if(!e.data.size)return;
+    videoWrites=Promise.resolve();videoChunks=0;videoError=null;videoWriteError=null;
+    videoAccumulated=0;videoClock=0;videoDidStart=false;
+    let resolveData,rejectData,acceptData=true;
+    const firstData=new Promise((resolve,reject)=>{resolveData=resolve;rejectData=reject;});
+    // The first chunk can fail while metadata is still being persisted.
+    firstData.catch(()=>{});
+    videoStopped=new Promise(resolve=>{currentRecorder.onstop=resolve;});
+    videoDetach=()=>{
+      acceptData=false;
+      currentRecorder.ondataavailable=currentRecorder.onerror=currentRecorder.onstop=currentRecorder.onstart=null;
+    };
+    currentRecorder.onstart=()=>{videoClock=performance.now();};
+    currentRecorder.ondataavailable=e=>{
+      if(!acceptData || !e.data.size)return;
       const sequence=videoChunks++,blob=e.data,savedMs=videoElapsed();
       videoWrites=videoWrites.then(async()=>{
-        if(videoError)return; // Never mark a later chunk durable after a gap caused by a failed write.
+        if(videoWriteError)return; // No later chunks may bridge a gap in durable storage.
         await mediaCommit('chunks',{id:`${videoId}:${sequence}`,projectId:state.id,videoId,sequence,blob},m=>{
           const v=m.videos.find(x=>x.id===videoId);v.chunks=sequence+1;v.bytes+=blob.size;v.savedMs=savedMs;
         });
-        activeVideo=clone(method().videos.find(v=>v.id===videoId));
+        activeVideo=clone(method().videos.find(v=>v.id===videoId));resolveData();
       }).catch(e=>{
-        videoError=e;report(e);
-        if(recorder?.state!=='inactive'){videoAccumulated=videoElapsed();videoClock=0;recorder.stop();}
+        videoWriteError=videoError=e;rejectData(e);
+        try{if(currentRecorder.state!=='inactive')currentRecorder.stop();}catch{}
       });
     };
-    recorder.onerror=e=>{videoError=e.error||new Error('Ошибка записи видео');report(videoError);};
-    try{recorder.start(1000);}catch(e){
-      // No media exists if start throws. Do not leave an empty successful-looking
-      // clip or a recorder whose stop promise can never resolve.
-      recorder=null;activeVideo=null;videoClock=0;videoStopped=null;
-      method().videos=method().videos.filter(v=>v.id!==videoId);
-      await persist();throw e;
-    }
-    // Some MP4 encoders delay timeslice events until a keyframe. Request the
-    // buffered data explicitly as well, so durable storage starts during capture.
+    currentRecorder.onerror=e=>{
+      videoError=e.error||new Error('Ошибка записи видео');rejectData(videoError);
+      // stopPass/stopVideo consume any final data, including after an async error.
+    };
+    method().videos.push(clone(activeVideo));method().revision++;await persist();
+    try{currentRecorder.start(1000);videoDidStart=true;}
+    catch(e){videoError=e;throw e;}
     videoFlushTimer=setInterval(()=>{
-      if(recorder?.state==='recording'){
-        try{recorder.requestData();}catch(e){videoError=e;}
+      if(currentRecorder.state==='recording'){
+        try{currentRecorder.requestData();}catch(e){videoError=e;rejectData(e);}
       }
     },1000);
+    try{await support.deadline(firstData,8000,'Кодек не выдаёт данные видео. Запись остановлена; попробуйте открыть камеру снова.');}
+    catch(e){videoError=e;throw e;}
+    if(videoError)throw videoError;
   }
   async function togglePause(){
     if(!recorder || recorder.state==='inactive')return;
     if(recorder.state==='recording'){
       videoAccumulated=videoElapsed();videoClock=0;recorder.requestData();recorder.pause();
-      $('counter').textContent=duration(videoAccumulated);
+      $('counter').textContent=`ПАУЗА ${duration(videoAccumulated)}`;
       $('retakeBtn').textContent='Продолжить видео';message('Видео на паузе. Продолжение в этом окне останется в том же файле.');
     }else{
       recorder.resume();videoClock=performance.now();$('retakeBtn').textContent='Пауза видео';message('Запись продолжается.');
@@ -481,15 +588,25 @@
   async function stopVideo(){
     if(!recorder)return;
     clearInterval(videoFlushTimer);videoFlushTimer=null;
-    if(recorder.state!=='inactive'){
-      videoAccumulated=videoElapsed();videoClock=0;recorder.stop();
+    const id=activeVideo.id;
+    videoAccumulated=videoElapsed();videoClock=0;
+    try{
+      if(recorder.state!=='inactive')recorder.stop();
+      if(videoDidStart)await support.deadline(videoStopped,5000,'Кодек не завершил запись. Сохранённые части оставлены для скачивания.');
+    }catch(e){videoError=videoError||e;}
+    videoDetach?.();await videoWrites;
+    const v=method().videos.find(v=>v.id===id);
+    if(!v.chunks){
+      videoError=videoError||new Error('Видео не выдало ни одного сохранённого фрагмента.');
+      method().videos=method().videos.filter(v=>v.id!==id); // This attempt has no originals to preserve.
+    }else{
+      v.status=videoError?'interrupted':'saved';v.endedAt=now();v.durationMs=videoAccumulated;
+      v.guideEnd=current;v.error=videoError?.message||null;
     }
-    await videoStopped;await videoWrites;
-    const v=method().videos.find(v=>v.id===activeVideo.id);
-    v.status=videoError?'interrupted':'saved';v.endedAt=now();v.durationMs=videoAccumulated;
-    v.guideEnd=current;v.error=videoError?.message||null;method().revision++;await persist();
-    recorder=null;activeVideo=null;
-    if(videoError)throw videoError;
+    const failure=videoError;
+    recorder=null;activeVideo=null;videoStopped=null;videoDetach=null;videoDidStart=false;
+    method().revision++;await persist();
+    if(failure)throw failure;
   }
   async function stopPass(finished){
     if(stopping)return;stopping=true;started=false;
