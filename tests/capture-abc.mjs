@@ -258,6 +258,30 @@ try{
     finally{clearInterval(timer);s.getTracks().forEach(t=>t.stop());}
   });
   assert.ok(slowProbe.measuredFps<6,'Probe must measure slow encoded frames, not requested camera FPS');
+  // Safari may decode a valid clip without exposing frame counters. Do not call
+  // that an encoder failure or pretend the camera's requested FPS was measured.
+  const unknownFps=await page.evaluate(async()=>{
+    const proto=HTMLVideoElement.prototype,names=['getVideoPlaybackQuality','webkitDecodedFrameCount','requestVideoFrameCallback'];
+    const descriptors=names.map(n=>Object.getOwnPropertyDescriptor(proto,n));
+    Object.defineProperty(proto,'getVideoPlaybackQuality',{configurable:true,value:()=>({totalVideoFrames:0})});
+    Object.defineProperty(proto,'webkitDecodedFrameCount',{configurable:true,get:()=>0});
+    Object.defineProperty(proto,'requestVideoFrameCallback',{configurable:true,value:undefined});
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:'environment'}}});
+    try{return await LunaruCaptureSupport.probe(s,{});}
+    finally{s.getTracks().forEach(t=>t.stop());names.forEach((n,i)=>{if(descriptors[i])Object.defineProperty(proto,n,descriptors[i]);else delete proto[n];});}
+  });
+  assert.equal(unknownFps.measuredFps,null);assert.equal(unknownFps.playbackVerified,true);assert.ok(unknownFps.measurementWarning);
+  await page.evaluate(()=>{
+    const original=HTMLMediaElement.prototype.play;let blocked=false;
+    HTMLMediaElement.prototype.play=function(){if(this.parentElement?.id==='videoProbe'&&!blocked){blocked=true;return Promise.reject(new DOMException('Gesture required','NotAllowedError'));}return original.call(this);};
+    window.gestureProbe=(async()=>{
+      const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:'environment'}}});
+      try{return await LunaruCaptureSupport.probe(s,{});}
+      finally{s.getTracks().forEach(t=>t.stop());HTMLMediaElement.prototype.play=original;}
+    })();
+  });
+  await page.locator('#videoProbe button:not([hidden])').waitFor();await page.click('#videoProbe button');
+  assert.equal((await page.evaluate(()=>window.gestureProbe)).playbackVerified,true);
 
   // An encoder can fail on the real start, even after a good probe. No permanent
   // busy state or empty saved clip; bounded stop even if no stop event is delivered.
@@ -289,6 +313,23 @@ try{
   const second=await context.newPage();await second.goto(base);
   await second.waitForFunction(()=>document.querySelector('#status').textContent.includes('другой вкладке'));
   assert.equal(await second.locator('#newBtn').isDisabled(),true);await second.close();
+  assert.match(await page.textContent('#homeStorage'),/ZIP/);
+  const deleteId=await page.evaluate(()=>state.id);
+  await page.click('#finishObjectBtn');
+  page.removeAllListeners('dialog');page.once('dialog',d=>d.dismiss());
+  await page.locator(`[data-project-id="${deleteId}"] .deleteObject`).click();
+  assert.equal(await page.locator(`[data-project-id="${deleteId}"]`).count(),1,'Cancelled deletion keeps project');
+  const remainingBefore=await page.evaluate(async id=>{
+    const db=await new Promise(resolve=>{const r=indexedDB.open('lunaru_capture_abc_v014',1);r.onsuccess=()=>resolve(r.result);});
+    const counts={};for(const name of ['projects','files','chunks'])counts[name]=await new Promise(resolve=>{const r=db.transaction(name).objectStore(name).getAll();r.onsuccess=()=>resolve(r.result.filter(v=>(name==='projects'?v.id:v.projectId)!==id).length);});db.close();return counts;
+  },deleteId);
+  page.once('dialog',d=>d.accept());await page.locator(`[data-project-id="${deleteId}"] .deleteObject`).click();
+  await page.locator(`[data-project-id="${deleteId}"]`).waitFor({state:'detached'});
+  const remainingAfter=await page.evaluate(async id=>{
+    const db=await new Promise(resolve=>{const r=indexedDB.open('lunaru_capture_abc_v014',1);r.onsuccess=()=>resolve(r.result);});
+    const counts={};for(const name of ['projects','files','chunks'])counts[name]=await new Promise((resolve,reject)=>{const r=db.transaction(name).objectStore(name).getAll();r.onsuccess=()=>{if(r.result.some(v=>(name==='projects'?v.id:v.projectId)===id))reject(Error('Deleted media remained'));else resolve(r.result.length);};});db.close();return counts;
+  },deleteId);
+  assert.deepEqual(remainingAfter,remainingBefore,'Deletion removes only chosen object and all its media');
   assert.deepEqual(errors,[]);
   const report={passed:true,browser:browser.version(),camera:'simulated rear 640×480; no real phone',
     checks:['A 32 frames and retake','B 40-frame zigzag','C real MediaRecorder pause/resume and two original video files',
@@ -300,7 +341,8 @@ try{
       'async encoder error selects and decodes fallback without changing device',
       'saved video plays in app', 'real start error without stop event recovers without empty clip',
       'rear optical axis handles Euler branch and zenith', 'reticle layout at 375px and three screen heights',
-      'real 3fps encoded probe is measured as slow'],
+      'real 3fps encoded probe is measured as slow', 'missing FPS counters preserve playable probe with honest warning',
+      'blocked autoplay recovers through direct tap', 'cancel deletion preserves data; confirmed deletion removes only selected object media'],
     artifacts:[A.file,B.file,C.file]};
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(e){

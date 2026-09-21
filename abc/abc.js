@@ -1,4 +1,4 @@
-/* TEST 0.15: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
+/* TEST 0.17: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
 /* global $, targets, state, current, shots, baseYaw, stream, started, lastAngles,
    stableSince, autoLock, selectedMode, show, save, refreshHome, openStation,
    shoot, render, onOrientation, stopGpsWatch, startGpsWatch, orientPermission,
@@ -6,7 +6,7 @@
    pad, norm, autoObjectName, fflate */
 "use strict";
 (() => {
-  const VERSION = '0.16.0', DATABASE = 'lunaru_capture_abc_v014';
+  const VERSION = '0.17.0', DATABASE = 'lunaru_capture_abc_v014';
   const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide();
   let videoOptions=null, playbackUrl=null, videoWriteError=null, poleRearm=null;
   const originalTargets = targets.map(t => ({...t}));
@@ -107,7 +107,8 @@
       measuredAt:lastSensor.time};
   }
   function formatCamera(c){
-    return `${c.width} × ${c.height} · ${Number(c.recordingCheck?.measuredFps||c.frameRate||0).toFixed(1)} fps${c.recordingCheck?' в пробе':''}${c.zoom!=null ? ` · зум ${c.zoom}×` : ''}`;
+    const fps=c.recordingCheck ? (c.recordingCheck.measuredFps==null?'fps не измерены':`${c.recordingCheck.measuredFps.toFixed(1)} fps в пробе`) : `${Number(c.frameRate||0).toFixed(1)} fps заявлено`;
+    return `${c.width} × ${c.height} · ${fps}${c.zoom!=null ? ` · зум ${c.zoom}×` : ''}`;
   }
   function downloadText(m){
     if(!m.download || m.download.revision!==m.revision)return 'Этот состав набора ещё не скачивался.';
@@ -125,14 +126,43 @@
     if(!db)return;
     projects=(await all('projects')).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
     $('savedObjects').replaceChildren();
+    const usage=await sourceUsage();
+    $('homeStorage').textContent=`Исходники в этом браузере: ${mb(Object.values(usage).reduce((a,b)=>a+b,0))}. ZIP в «Загрузках» занимает место отдельно. Удаление здесь не удаляет ZIP и Google Drive.`;
     for(const p of projects){
       const b=makeButton('', 'alt',async()=>{await writes;state=await read('projects',p.id);retakeIndex=null;mirror();await openStation();});
       const title=document.createElement('b');title.textContent=p.objectName;
       const desc=document.createElement('span');desc.textContent=`S01 · A: ${p.methods.A.shots.filter(Boolean).length}/32 · B: ${p.methods.B.shots.filter(Boolean).length}/40 · C: ${p.methods.C.videos.filter(v=>v.chunks>0).length} видео`;
-      b.append(title,desc);$('savedObjects').append(b);
+      desc.textContent+=` · ${mb(usage[p.id]||0)}`;
+      const row=document.createElement('div');row.className='savedObject';row.dataset.projectId=p.id;
+      const remove=makeButton('Удалить с телефона','deleteObject',()=>deleteProject(p.id));
+      remove.setAttribute('aria-label',`Удалить объект ${p.objectName} с телефона`);
+      b.append(title,desc);row.append(b,remove);$('savedObjects').append(row);
     }
     $('bootStatus').textContent=projects.length ? 'Сохранённые объекты — открыть, продолжить или скачать:' : 'Создайте объект. Все три способа останутся в одной станции S01.';
   };
+  async function sourceUsage(){
+    const totals={};
+    await Promise.all(['files','chunks'].map(name=>new Promise((resolve,reject)=>{
+      const tx=db.transaction(name),req=tx.objectStore(name).openCursor();
+      tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);
+      req.onsuccess=()=>{const c=req.result;if(!c)return;const v=c.value;totals[v.projectId]=(totals[v.projectId]||0)+(v.blob?.size||0);c.continue();};
+    })));
+    return totals;
+  }
+  async function deleteProject(id){
+    if(started||recorder||shooting||downloadBusy)throw new Error('Сначала остановите съёмку и скачивание.');
+    const p=await read('projects',id);if(!p)return;
+    if(!confirm(`Удалить объект «${p.objectName}» и все его фото/видео из этого браузера?\n\nСначала скачайте нужные наборы и проверьте ZIP. Отменить удаление нельзя. Копии в «Загрузках» и Google Drive останутся.`))return;
+    await queue(()=>transaction(['projects','files','chunks'],tx=>{
+      tx.objectStore('projects').delete(id);
+      for(const name of ['files','chunks']){
+        const req=tx.objectStore(name).openCursor();
+        req.onsuccess=()=>{const c=req.result;if(!c)return;if(c.value.projectId===id)c.delete();c.continue();};
+      }
+    }));
+    if(state?.id===id)state=null;
+    await refreshHome();message('Объект удалён из этого браузера. Скачанные ZIP и Google Drive не затронуты.');
+  }
   async function storageInfo(){
     try{
       const [e,p]=await Promise.all([navigator.storage?.estimate(),navigator.storage?.persisted()]);
@@ -276,12 +306,15 @@
         $('photoInfo').textContent='Короткая пробная запись и проверка воспроизведения. Она не входит в набор. Подождите несколько секунд…';
         message(candidate.long ? `Проверяю доступный режим до ${candidate.long} px…` : 'Проверяю, может ли браузер записать видео…');
         const verification=await support.probe(stream,candidate.options);
-        if(verification.measuredFps<12)throw new Error(`Слишком медленная запись: ${verification.measuredFps.toFixed(1)} кадр/с в пробе.`);
+        if(verification.measuredFps!=null&&verification.measuredFps<12)throw new Error(`Слишком медленная запись: ${verification.measuredFps.toFixed(1)} кадр/с в пробе.`);
         videoOptions=candidate.options;
         readyCamera={...cameraSnapshot(),width:verification.width,height:verification.height,
           recordingCheck:verification,recordingAttempts:attempts};
         return;
-      }catch(e){attempts.push({limit:candidate.long,mimeType:candidate.options.mimeType||'browser-default',error:e.message});}
+      }catch(e){
+        attempts.push({limit:candidate.long,mimeType:candidate.options.mimeType||'browser-default',error:e.message});
+        if(e.name==='PlaybackPermissionError')throw e;
+      }
     }
     throw new Error(`Видео не запустилось ни в одном проверенном режиме. ${attempts.at(-1)?.error||''} Попробуйте открыть эту ссылку в обычном Safari на iPhone или Chrome на Android.`);
   }
@@ -326,7 +359,7 @@
       if(state.activeMethod==='C')await prepareVideo();else await setupPhoto();
       $('cameraInfo').textContent=`Задняя камера · фактически ${formatCamera(readyCamera)}`;
       $('photoInfo').textContent=state.activeMethod==='C'
-        ? `Запрошено 4K (3840 × 2160). ${Math.max(readyCamera.width,readyCamera.height)<3840 ? '4K не получено для записи: будет использован показанный выше проверенный режим.' : '4K прошло проверку записи.'} Короткое видео записано и воспроизведено. Формат: ${readyCamera.recordingCheck.mimeType}. Без звука.`
+        ? `Запрошено 4K (3840 × 2160). ${Math.max(readyCamera.width,readyCamera.height)<3840 ? '4K не получено для записи: будет использован показанный выше проверенный режим.' : '4K прошло проверку записи.'} Короткое видео записано и воспроизведено. Формат: ${readyCamera.recordingCheck.mimeType}. Без звука. ${readyCamera.recordingCheck.measurementWarning||''}`
         : photoDescription();
       $('confirmCameraBtn').textContent=state.activeMethod==='C' ? 'НАЧАТЬ ЗАПИСЬ ВИДЕО' : 'НАЧАТЬ ФОТОСЪЁМКУ';
       await navigator.storage?.persist?.().catch(()=>false);
@@ -744,7 +777,7 @@
     if(navigator.locks){
       await new Promise((resolve,reject)=>{
         navigator.locks.request('lunaru-capture-abc-tab',{ifAvailable:true},lock=>{
-          if(!lock){reject(new Error('LUNARU A/B/C уже открыта в другой вкладке. Закройте её и обновите эту страницу.'));return;}
+          if(!lock){reject(Object.assign(new Error('LUNARU A/B/C уже открыта в другой вкладке. Закройте её и обновите эту страницу.'),{name:'ActiveTabError'}));return;}
           resolve();return new Promise(()=>{}); // Released by the browser when this document closes.
         }).catch(reject);
       });
@@ -764,5 +797,11 @@
     }
     $('newBtn').disabled=false;await refreshHome();message('Готово. Используйте одну вкладку LUNARU для съёмки.');
   }
-  boot().catch(e=>{$('bootStatus').textContent='Хранилище недоступно — съёмка не начата. Откройте обычную вкладку Chrome, проверьте свободное место.';report(e);});
+  boot().catch(e=>{
+    $('bootStatus').textContent=e.name==='ActiveTabError'
+      ? 'LUNARU уже открыта в другой вкладке этого браузера. Вернитесь в неё или закройте её и нажмите «Повторить». Это не ошибка памяти.'
+      : `Не удалось открыть данные браузера: ${e.name||'ошибка'}. Съёмка не начата. Проверьте доступ к хранилищу и свободное место.`;
+    $('retryBootBtn').hidden=false;report(e);
+  });
+  $('retryBootBtn').onclick=()=>location.reload();
 })();

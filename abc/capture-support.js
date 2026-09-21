@@ -27,26 +27,53 @@ window.LunaruCaptureSupport = (() => {
   async function inspectVideo(blob) {
     const video = document.createElement('video'), url = URL.createObjectURL(blob);
     video.muted = true; video.playsInline = true; video.preload = 'auto';
-    video.style.cssText = 'position:fixed;left:-10000px;width:2px;height:2px';
-    document.body.append(video);
+    // Keep the probe visible and provide a direct gesture if Safari blocks play().
+    const panel=document.createElement('div'),label=document.createElement('div'),button=document.createElement('button');
+    panel.id='videoProbe';panel.style.cssText='position:fixed;z-index:1000;inset:15% 8%;padding:16px;background:#102330;color:white;border:2px solid #49b8ff;border-radius:16px;display:flex;flex-direction:column;gap:12px';
+    label.textContent='Проверка видео · короткая проба, не входит в набор';
+    video.style.cssText='width:100%;height:60%;min-height:100px;object-fit:contain';
+    video.setAttribute('muted','');video.setAttribute('playsinline','');
+    button.textContent='▶ Воспроизвести пробу';button.hidden=true;
+    panel.append(label,video,button);document.body.append(panel);
+    let callback=null,callbackFrames=0;
+    if(video.requestVideoFrameCallback){
+      const tick=()=>{callbackFrames++;callback=video.requestVideoFrameCallback(tick);};
+      callback=video.requestVideoFrameCallback(tick);
+    }
     try {
       const decoded = new Promise((resolve, reject) => {
         video.onloadeddata = resolve;
         video.onerror = () => reject(new Error('Сохранённое видео не воспроизводится в этом браузере.'));
       });
+      decoded.catch(()=>{});
       video.src = url;
+      let playback=deadline(video.play(),3000,'Браузер не начал воспроизведение пробы.');
+      // Attach rejection handler immediately: loading and playback happen concurrently.
+      playback=playback.catch(async error=>{
+        if(error.name!=='NotAllowedError')throw error;
+        button.hidden=false;label.textContent='Нажмите «Воспроизвести пробу», чтобы разрешить проверку видео.';
+        try{await deadline(new Promise((resolve,reject)=>{
+          button.onclick=()=>{video.play().then(resolve,reject);};
+        }),30000,'Проверка отменена: воспроизведение не разрешено.');}
+        catch(e){throw Object.assign(new Error(e.message),{name:'PlaybackPermissionError'});}
+        finally{button.hidden=true;}
+      });
+      const ended=new Promise(resolve=>{video.onended=resolve;});
+      await playback;
       await deadline(decoded, 6000, 'Не удалось проверить изображение в видео.');
       if (!video.videoWidth || !video.videoHeight) throw new Error('В видео нет изображения.');
-      const ended=new Promise(resolve => {video.onended=resolve;});
-      await deadline(video.play(), 3000, 'Не удалось начать воспроизведение видео.');
-      await deadline(ended, 6000, 'Проверочное видео не завершило воспроизведение.');
+      let completed=true;
+      await deadline(ended,6000,'Проба не завершилась.').catch(()=>{completed=false;});
+      if(video.currentTime<.05)throw new Error('Пробное видео не воспроизводит движение.');
       const seconds=Number.isFinite(video.duration)?video.duration:video.currentTime;
-      const frames=video.getVideoPlaybackQuality?.().totalVideoFrames || video.webkitDecodedFrameCount;
-      if (!(seconds>.3) || !frames) throw new Error('Не удалось измерить частоту кадров пробного видео.');
+      const frames=video.getVideoPlaybackQuality?.().totalVideoFrames || video.webkitDecodedFrameCount || callbackFrames;
+      const measuredFps=completed&&seconds>.3&&seconds<10&&frames>1?frames/seconds:null;
       return {width:video.videoWidth, height:video.videoHeight,
-        durationMs:Math.round(seconds*1000),decodedFrames:frames,measuredFps:frames/seconds};
+        durationMs:Number.isFinite(seconds)?Math.round(seconds*1000):null,decodedFrames:frames||null,measuredFps,
+        playbackVerified:true,measurementWarning:measuredFps===null?'Видео воспроизводится; браузер не дал надёжно измерить частоту кадров. Проверьте короткую запись перед проходом.':null};
     } finally {
-      video.pause(); video.removeAttribute('src'); video.load(); video.remove(); URL.revokeObjectURL(url);
+      if(callback!==null)video.cancelVideoFrameCallback?.(callback);
+      video.pause(); video.removeAttribute('src'); video.load(); panel.remove(); URL.revokeObjectURL(url);
     }
   }
   async function probe(stream, options) {
