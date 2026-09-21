@@ -75,6 +75,25 @@ try{
     DeviceOrientationEvent.requestPermission=()=>{window.permissionInClick=!!window.inClick;return Promise.resolve(window.inClick?'granted':'denied');};
   });
   await start();assert.equal(await page.evaluate(()=>window.permissionInClick),true);
+  const poses=await page.evaluate(()=>{
+    const p=window.LunaruCaptureSupport.cameraPose;
+    return [p({alpha:0,beta:90,gamma:0}),p({alpha:80,beta:90,gamma:-80}),p({alpha:180,beta:-90,gamma:0}),p({alpha:0,beta:-179,gamma:0}),p({alpha:null,beta:90,gamma:0})];
+  });
+  assert.ok(Math.abs(poses[0].pitch)<.001);
+  assert.ok(Math.min(poses[1].yaw,360-poses[1].yaw)<.001,'Euler branch change must preserve optical heading');
+  assert.ok(Math.abs(poses[2].pitch)<.001,'Negative beta branch still faces horizon');
+  assert.ok(poses[3].pitch>88,'Crossing zenith must not turn upper target into nadir');
+  assert.equal(poses[4],null);
+  for(const height of [851,660,595]){
+    await page.setViewportSize({width:375,height});
+    const boxes=await page.evaluate(()=>{
+      const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {top:r.top,bottom:r.bottom,center:r.top+r.height/2};};
+      return {aim:rect('target'),video:rect('video'),info:rect('captureDetails')};
+    });
+    assert.ok(Math.abs(boxes.aim.center-boxes.video.center)<1,'Reticle must center on video');
+    assert.ok(boxes.info.bottom<=boxes.aim.top,'Camera metadata must not obscure reticle');
+  }
+  await page.setViewportSize({width:393,height:851});
   await page.evaluate(async()=>{
     baseYaw=state.baseYaw=state.methods.A.baseYaw=0;
     for(let i=0;i<15;i++){
@@ -230,6 +249,15 @@ try{
   await page.waitForFunction(()=>document.querySelector('#playbackStatus').textContent.includes('воспроизводится'));
   await page.click('#closeVideoReviewBtn');
   await page.evaluate(()=>{window.MediaRecorder=window.originalRecorder;});
+  const slowProbe=await page.evaluate(async()=>{
+    const c=document.createElement('canvas');c.width=160;c.height=120;
+    const ctx=c.getContext('2d');let tick=0;
+    const timer=setInterval(()=>{ctx.fillStyle=++tick%2?'red':'blue';ctx.fillRect(0,0,160,120);},100);
+    const s=c.captureStream(3);
+    try{return await window.LunaruCaptureSupport.probe(s,{});}
+    finally{clearInterval(timer);s.getTracks().forEach(t=>t.stop());}
+  });
+  assert.ok(slowProbe.measuredFps<6,'Probe must measure slow encoded frames, not requested camera FPS');
 
   // An encoder can fail on the real start, even after a good probe. No permanent
   // busy state or empty saved clip; bounded stop even if no stop event is delivered.
@@ -270,7 +298,9 @@ try{
       'encoder start failure leaves no empty successful clip or stalled recorder',
       'iOS permission requested in click stack', 'jitter allows stable auto photo; fast turn does not; 359/0 wrap',
       'async encoder error selects and decodes fallback without changing device',
-      'saved video plays in app', 'real start error without stop event recovers without empty clip'],
+      'saved video plays in app', 'real start error without stop event recovers without empty clip',
+      'rear optical axis handles Euler branch and zenith', 'reticle layout at 375px and three screen heights',
+      'real 3fps encoded probe is measured as slow'],
     artifacts:[A.file,B.file,C.file]};
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(e){

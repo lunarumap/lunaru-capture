@@ -5,8 +5,18 @@ window.LunaruCaptureSupport = (() => {
   function deadline(promise, ms, message) {
     let timer;
     return Promise.race([promise, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer = setTimeout(() => reject(new DOMException(message, 'TimeoutError')), ms);
     })]).finally(() => clearTimeout(timer));
+  }
+  // W3C intrinsic Z-X-Y device orientation; rear camera looks along device -Z.
+  // https://www.w3.org/TR/orientation-event/#a-1-calculating-compass-heading
+  function cameraPose({alpha,beta,gamma}) {
+    if (![alpha,beta,gamma].every(Number.isFinite)) return null;
+    const r=Math.PI/180,a=alpha*r,b=beta*r,g=gamma*r;
+    const x=-Math.cos(a)*Math.sin(g)-Math.sin(a)*Math.sin(b)*Math.cos(g);
+    const y=-Math.sin(a)*Math.sin(g)+Math.cos(a)*Math.sin(b)*Math.cos(g);
+    const z=-Math.cos(b)*Math.cos(g);
+    return {yaw:(Math.atan2(x,y)/r+360)%360,pitch:Math.atan2(z,Math.hypot(x,y))/r};
   }
   function recorderOptions() {
     if (!window.MediaRecorder) throw new Error('Браузер не поддерживает запись видео. Откройте страницу в Safari или Chrome.');
@@ -27,12 +37,14 @@ window.LunaruCaptureSupport = (() => {
       video.src = url;
       await deadline(decoded, 6000, 'Не удалось проверить изображение в видео.');
       if (!video.videoWidth || !video.videoHeight) throw new Error('В видео нет изображения.');
+      const ended=new Promise(resolve => {video.onended=resolve;});
       await deadline(video.play(), 3000, 'Не удалось начать воспроизведение видео.');
-      await deadline(new Promise(resolve => {
-        video.ontimeupdate = () => { if (video.currentTime > 0.05) resolve(); };
-      }), 3000, 'Видеофайл не воспроизводит движение.');
+      await deadline(ended, 6000, 'Проверочное видео не завершило воспроизведение.');
+      const seconds=Number.isFinite(video.duration)?video.duration:video.currentTime;
+      const frames=video.getVideoPlaybackQuality?.().totalVideoFrames || video.webkitDecodedFrameCount;
+      if (!(seconds>.3) || !frames) throw new Error('Не удалось измерить частоту кадров пробного видео.');
       return {width:video.videoWidth, height:video.videoHeight,
-        durationMs:Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : null};
+        durationMs:Math.round(seconds*1000),decodedFrames:frames,measuredFps:frames/seconds};
     } finally {
       video.pause(); video.removeAttribute('src'); video.load(); video.remove(); URL.revokeObjectURL(url);
     }
@@ -57,7 +69,7 @@ window.LunaruCaptureSupport = (() => {
       expiry = setTimeout(() => finish(new Error('Кодек не завершил проверочную запись.')), 4500);
       try {
         recorder.start();
-        stopTimer = setTimeout(() => { try { recorder.stop(); } catch (e) { finish(e); } }, 1100);
+        stopTimer = setTimeout(() => { try { recorder.stop(); } catch (e) { finish(e); } }, 1800);
       } catch (e) { finish(e); }
     });
     const decoded = await inspectVideo(blob);
@@ -89,8 +101,8 @@ window.LunaruCaptureSupport = (() => {
       this.inside = Math.abs(dy) < limit && Math.abs(dp) < limit && rawNear;
       if (!this.inside || speed > 28) this.since = null;
       else if (this.since === null) this.since = time;
-      return {dy, dp, good:this.inside, ready:this.since !== null && time-this.since >= 450};
+      return {dy, dp, good:this.inside, progress:this.since===null?0:Math.min(1,(time-this.since)/450), ready:this.since !== null && time-this.since >= 450};
     }
   }
-  return {delay, deadline, recorderOptions, inspectVideo, probe, PhotoGuide};
+  return {delay, deadline, recorderOptions, inspectVideo, probe, PhotoGuide, cameraPose};
 })();

@@ -6,9 +6,9 @@
    pad, norm, autoObjectName, fflate */
 "use strict";
 (() => {
-  const VERSION = '0.15.0', DATABASE = 'lunaru_capture_abc_v014';
+  const VERSION = '0.16.0', DATABASE = 'lunaru_capture_abc_v014';
   const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide();
-  let videoOptions=null, playbackUrl=null, videoWriteError=null;
+  let videoOptions=null, playbackUrl=null, videoWriteError=null, poleRearm=null;
   const originalTargets = targets.map(t => ({...t}));
   const zigzag = Array.from({length:12}, (_, sector) =>
     (sector % 2 ? [-45,0,45] : [45,0,-45]).map(pitch => ({
@@ -85,7 +85,7 @@
   }
   save=()=>{persist().catch(report);};
   const emptyMethod=()=>({currentFrame:0,shots:[],videos:[],baseYaw:null,finished:false,
-    camera:null,download:null,revision:0,guideEvents:[]});
+    camera:null,download:null,revision:0,guideEvents:[],orientationModel:'rear-camera-v1'});
   async function mediaCommit(store,record,update){
     return queue(async()=>{
       const next=clone(state);update(next.methods[next.activeMethod]);
@@ -103,11 +103,11 @@
       alpha:lastSensor.alpha,beta:lastSensor.beta,gamma:lastSensor.gamma,
       compassHeading:lastSensor.heading,absolute:lastSensor.absolute,
       screenAngle:screen.orientation?.angle ?? window.orientation ?? null,
-      convention:'TEST 0.13 portrait: yaw=compass or 360-alpha; pitch=beta-90; raw gamma is not calibrated camera roll',
+      convention:method().orientationModel==='rear-camera-v1'?'Rear camera -Z, W3C Z-X-Y; relative sensor yaw, optical pitch; not surveyed azimuth':'TEST 0.13 legacy: yaw=compass or 360-alpha; pitch=beta-90',
       measuredAt:lastSensor.time};
   }
   function formatCamera(c){
-    return `${c.width} × ${c.height} · ${Number(c.frameRate||0).toFixed(1)} fps${c.zoom!=null ? ` · зум ${c.zoom}×` : ''}`;
+    return `${c.width} × ${c.height} · ${Number(c.recordingCheck?.measuredFps||c.frameRate||0).toFixed(1)} fps${c.recordingCheck?' в пробе':''}${c.zoom!=null ? ` · зум ${c.zoom}×` : ''}`;
   }
   function downloadText(m){
     if(!m.download || m.download.revision!==m.revision)return 'Этот состав набора ещё не скачивался.';
@@ -260,13 +260,13 @@
     const candidates=[{long:null,options:options[0]},
       {long:1920,options:options[0]},
       {long:1920,options:options[1]||{}},
-      {long:1280,options:{}}];
+      {long:1280,options:{}},{long:854,options:{},fps:15}];
     for(const candidate of candidates){
       try{
         if(candidate.long){
           const portrait=initial.height>initial.width, short=Math.round(candidate.long*9/16);
           await track.applyConstraints({width:{ideal:portrait?short:candidate.long,max:portrait?short:candidate.long},
-            height:{ideal:portrait?candidate.long:short,max:portrait?candidate.long:short},frameRate:{ideal:30,max:30}});
+            height:{ideal:portrait?candidate.long:short,max:portrait?candidate.long:short},frameRate:{ideal:candidate.fps||30,max:candidate.fps||30}});
           await support.delay(150);
         }
         const settings=track.getSettings();
@@ -276,6 +276,7 @@
         $('photoInfo').textContent='Короткая пробная запись и проверка воспроизведения. Она не входит в набор. Подождите несколько секунд…';
         message(candidate.long ? `Проверяю доступный режим до ${candidate.long} px…` : 'Проверяю, может ли браузер записать видео…');
         const verification=await support.probe(stream,candidate.options);
+        if(verification.measuredFps<12)throw new Error(`Слишком медленная запись: ${verification.measuredFps.toFixed(1)} кадр/с в пробе.`);
         videoOptions=candidate.options;
         readyCamera={...cameraSnapshot(),width:verification.width,height:verification.height,
           recordingCheck:verification,recordingAttempts:attempts};
@@ -339,6 +340,11 @@
     try{
       photoGuide.reset();
       if(!stream)throw new Error('Камера закрыта. Откройте её снова.');
+      if(!method().orientationModel){
+        const hasOriginals=method().shots.some(Boolean)||method().videos.some(v=>v.chunks>0);
+        method().orientationModel=hasOriginals&&method().baseYaw!=null?'legacy-013':'rear-camera-v1';
+        if(!hasOriginals)method().baseYaw=state.baseYaw=baseYaw=null;
+      }
       method().camera={...readyCamera};method().photoSource=photoSource;method().photoRequest=clone(photoSettings);
       method().finished=false;await persist();mirror();reviewOpen=false;
       if(state.activeMethod==='C'){message('Запускаю запись и ожидаю первые сохранённые данные…');await startVideo();}
@@ -346,11 +352,13 @@
       $('captureUi').classList.add('active');$('actions').classList.add('active');
       $('objectPill').textContent=state.objectName;$('stationPill').textContent=`S01-${state.activeMethod}`;
       $('captureMethod').textContent=spec().title;
-      $('captureFormat').textContent=state.activeMethod==='C' ? formatCamera(readyCamera) : photoDescription();
+      $('captureFormat').textContent=state.activeMethod==='C' ? formatCamera(readyCamera) : `${photoSource==='image-capture'?'Фото API камеры':'Кадр видеопотока'} · ${readyCamera.width} × ${readyCamera.height}`;
       $('retakeBtn').textContent=state.activeMethod==='C' ? 'Пауза видео' : 'Переснять последний';
       $('manualBtn').textContent=state.activeMethod==='C' ? 'Следующее направление' : 'Снять вручную';
       $('finishStationBtn').textContent='Завершить способ';
-      started=true;stopping=false;startGpsWatch();checkVisualOrientation();render();
+      started=true;stopping=false;
+      if(state.mode==='outdoor-gps')startGpsWatch();else stopGpsWatch();
+      checkVisualOrientation();render();
       try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}
       clearInterval(guardTimer);guardTimer=setInterval(safely(checkCamera),1000);
       message('Снимайте с одной точки. Сохранённое покрытие проверим при сшивке.');
@@ -371,11 +379,12 @@
     }
   }
   function updateSensorText(){
-    const text=sensorLive() ? 'Датчики работают · автоподсказки включены' : state.activeMethod==='C'
+    const text=sensorLive() ? 'Датчики работают · направление приблизительное' : state.activeMethod==='C'
       ? 'Нет данных ориентации · направление меняйте кнопкой; запись видео работает независимо'
       : 'Нет данных ориентации · наведите телефон по подсказке и нажмите «Снять вручную»';
     for(const id of ['sensorReviewBtn','sensorCaptureBtn'])$(id).hidden=!!sensorLive() || typeof window.DeviceOrientationEvent?.requestPermission!=='function';
-    $('sensorInfo').textContent=text;$('captureSensors').textContent=text;
+    $('sensorInfo').textContent=text+(method().orientationModel==='legacy-013'?' · Старый набор: сохранена прежняя система углов. Новый прицел проверяйте в новом объекте.':'');
+    $('captureSensors').textContent=sensorLive()?'Датчики работают':'Нет ориентации · ручная съёмка';
     if(started && !sensorLive()){
       stableSince=0;autoLock=false;guideDwell=0;photoGuide.reset();manualGuide();
     }
@@ -385,6 +394,7 @@
     message(sensorAllowed?'Доступ к датчикам разрешён. Плавно поверните телефон.':'Доступ не получен. Откройте ссылку в Safari/Chrome и разрешите датчики; ручная съёмка доступна.');
   });
   function manualGuide(){
+    $('aimDot').hidden=true;$('aimProgress').style.strokeDashoffset='314';
     const t=targets[current];if(!t)return;
     $('guideMain').textContent=t.label;
     $('guideSub').textContent=`${t.verticalOnly ? 'Отдельный кадр; меняйте наклон, не место.' : `Поворот от начала ${t.yawOffset}° · наклон ${t.pitch>0?'+':''}${t.pitch}°.`} ${state.activeMethod==='C' ? 'Ведите плавно; затем «Следующее направление».' : 'Нажмите «Снять вручную».'}`;
@@ -393,7 +403,7 @@
   const originalRender=render;
   render=()=>{
     if(!state)return;
-    originalRender();photoGuide.reset();
+    originalRender();photoGuide.reset();$('aimDot').hidden=true;$('aimProgress').style.strokeDashoffset='314';
     const m=method();
     $('counter').textContent=state.activeMethod==='C' ? duration(videoElapsed()) : `${m.shots.filter(Boolean).length} / ${targets.length}`;
     if(retakeIndex!=null)$('guideSub').textContent=`Переснять кадр ${retakeIndex+1}. Старый снимок сохранён до замены.`;
@@ -409,6 +419,12 @@
   };
   function guidePhoto(){
     const t=targets[current];if(!t || !sensorLive())return;
+    if(t.verticalOnly&&targets[current-1]?.verticalOnly&&targets[current-1].pitch===t.pitch){
+      if(poleRearm!==current){
+        if(Math.abs(lastAngles.pitch)<55)poleRearm=current;
+        else{drawAim(0,lastAngles.pitch,false);$('guideMain').textContent='Смените направление для второго кадра';$('guideSub').textContent='Верните камеру к горизонту, немного поверните и снова наведите вверх/вниз.';return;}
+      }
+    }
     if(baseYaw===null && !t.verticalOnly){
       if(Math.abs(lastAngles.pitch)>18){
         $('guideMain').textContent='Сначала направьте камеру на горизонт';
@@ -417,6 +433,7 @@
       baseYaw=lastAngles.yaw;state.baseYaw=baseYaw;method().baseYaw=baseYaw;save();
     }
     const guide=photoGuide.sample(lastAngles,{...t,yaw:norm((baseYaw||0)+t.yawOffset)},current,performance.now());
+    drawAim(guide.dy,guide.dp,guide.good,guide.progress);
     $('target').classList.toggle('good',guide.good);
     if(guide.good){
       $('directionArrow').textContent='✓';$('guideMain').textContent='Замрите на мгновение';
@@ -430,13 +447,19 @@
       $('guideSub').textContent=vertical ? (guide.dp<0?'Плавно поднимите телефон':'Плавно опустите телефон') : (guide.dy<0?'Плавно повернитесь вправо':'Плавно повернитесь влево');
     }
   }
+  function drawAim(dy,dp,good,progress=0){
+    const area=$('aimArea'),dot=$('aimDot'),clamp=n=>Math.max(-1,Math.min(1,n));
+    dot.hidden=false;dot.style.left=`${50+clamp(-dy/45)*40}%`;dot.style.top=`${50+clamp(dp/45)*40}%`;
+    dot.classList.toggle('good',good);$('aimProgress').style.strokeDashoffset=String(314*(1-progress));
+  }
   const originalOrientation=onOrientation;
   window.removeEventListener('deviceorientation',originalOrientation,true);
   window.addEventListener('deviceorientation',e=>{
     const heading=Number.isFinite(e.webkitCompassHeading)?e.webkitCompassHeading:null;
-    if((!Number.isFinite(e.alpha) && heading===null) || !Number.isFinite(e.beta))return;
+    const pose=support.cameraPose(e);if(!pose)return;
     lastSensor={alpha:e.alpha,beta:e.beta,gamma:e.gamma,heading,absolute:e.absolute===true,time:now(),received:performance.now()};
-    lastAngles={yaw:norm(heading ?? (360-e.alpha)),pitch:Math.max(-90,Math.min(90,e.beta-90))};
+    lastAngles=state?.methods?.[state.activeMethod]?.orientationModel==='legacy-013'
+      ? {yaw:norm(heading ?? (360-e.alpha)),pitch:Math.max(-90,Math.min(90,e.beta-90))}:pose;
     if(!started || stopping || shooting || retakeIndex!=null || window.innerWidth>window.innerHeight)return;
     if(state.activeMethod!=='C'){guidePhoto();return;}
     if(!recorder || recorder.state!=='recording')return;
@@ -447,6 +470,7 @@
     }
     const dy=((lastAngles.yaw-(baseYaw+t.yawOffset)+540)%360)-180,dp=lastAngles.pitch-t.pitch;
     const good=Math.abs(dy)<10 && Math.abs(dp)<10;
+    drawAim(dy,dp,good);
     $('target').classList.toggle('good',good);
     $('guideMain').textContent=t.label;
     $('guideSub').textContent=`Плавно ${Math.abs(dp)>10 ? (dp<0?'вверх':'вниз') : Math.abs(dy)>10 ? (dy<0?'вправо':'влево') : 'пройдите направление'} · ${current+1}/${targets.length}`;
@@ -480,7 +504,13 @@
     try{
       let blob;
       if(photoSource==='image-capture'){
-        try{blob=await photoAPI.takePhoto(photoSettings);}catch(e){
+        try{
+          try{blob=await support.deadline(photoAPI.takePhoto(photoSettings),6000,'Фото-API не ответило за 6 секунд.');}
+          catch(e){
+            if(e.name==='TimeoutError'||!Object.keys(photoSettings).length)throw e;
+            blob=await support.deadline(photoAPI.takePhoto(),4000,'Фото-API не ответило.');photoSettings={};
+          }
+        }catch(e){
           // Explicit confirmation is required before switching from native photo to video frame.
           started=false;photoAPI=null;photoSource='video-frame';reviewOpen=true;
           $('captureUi').classList.remove('active');$('actions').classList.remove('active');show('cameraReview');
@@ -673,7 +703,7 @@
             objectId:state.id,objectName:state.objectName,station:'S01',stationName:state.stationName,
             captureMethod:key,dataset:folder,location:state.gps,placeMode:state.mode,
             plannedTargets:METHODS[key].grid,sphereCoverage:'not_validated',
-            camera:m.camera,photoSource:m.photoSource||null,photoRequest:m.photoRequest||null,
+            camera:m.camera,photoSource:m.photoSource||null,photoRequest:m.photoRequest||null,orientationModel:m.orientationModel||'legacy-013',
             frames:m.shots.filter(Boolean),videos:m.videos,guideEvents:m.guideEvents,
             passFinished:m.finished,totalSourceBytes:bytes,
             notes:['No resize or video transcoding during export.',
