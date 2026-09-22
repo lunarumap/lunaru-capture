@@ -8,4 +8,6 @@ The full 0.19 A/B/C suite passed on 2026-09-22 in Chromium 153.0.8010.0 with a s
 
 GitHub access recovered on 2026-09-22 after the earlier connector failure. Release address remains https://lunarumap.github.io/lunaru-capture/abc/. Deployment must additionally pass tests/live-smoke.mjs, which checks exact public assets, camera recording, reload and playback in isolated browser storage.
 
+Public verification completed on 2026-09-22: commit `7fd8949608f7c7dfdf5c932fa962e66e7c6b6f16`, GitHub Pages workflow `35674785566` succeeded. `tests/live-smoke.mjs` passed against the public HTTPS address: TEST 0.19 header, byte-identical HTML/JS/CSS/support files, real MediaRecorder with a simulated rear camera, persisted video after reload and saved playback, no page errors. Physical iPhone/Redmi tests remain outstanding. The shared links document and the Capture entry in the LUNARU journal now point to the same stable URL and identify TEST 0.19.
+
 Direct Google Drive upload is NOT implemented or enabled: there is no OAuth client configuration for LUNARU. abc/GOOGLE-DRIVE-SETUP.md records the prerequisite and the small next implementation. Native ZIP sharing must not be advertised as direct cloud upload.
