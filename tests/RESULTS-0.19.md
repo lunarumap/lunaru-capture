@@ -1,0 +1,11 @@
+# TEST 0.19 — explicit bulk cleanup
+
+Adds a home-screen button showing the number of A/B/C objects and original Blob bytes. A confirmation explicitly states that all these local photos, video chunks and progress will be removed. While checking/clearing, home controls are disabled; while capture/export is active the handler refuses deletion. The three stores are cleared atomically. Other databases, localStorage, downloaded ZIPs and Google Drive copies are not cleared. Separate old native apps/other browsers are outside this database.
+
+Targeted browser test `tests/cleanup-abc.mjs` covers: cancellation, injected failure after scheduling a project clear (whole transaction rolls back), retry after that failure, empty projects/files/chunks after confirmation, preserved unrelated localStorage, and a fresh photo saved after cleanup. Chromium uses simulated camera; no physical phone test.
+
+The full 0.19 A/B/C suite passed on 2026-09-22 in Chromium 153.0.8010.0 with a simulated rear camera at 640×480 and real MediaRecorder. All 25 checks passed: full A/B frame sets, retake, pause/resume video, reload/interruption recovery, original-byte ZIP verification and decoding, quota/encoder failures, sensor/reticle behavior, second-tab protection, individual and bulk cleanup, and mocked native ZIP sharing. The share test verifies browser handoff and original bytes; it is not an actual Google Drive upload or physical phone test. Targeted cleanup testing found and fixed a stale rejected write promise preventing retry. Run the targeted test with the same CHROMIUM_PATH, PLAYWRIGHT_MODULE and FFLATE_MODULE used for tests/capture-abc.mjs.
+
+GitHub access recovered on 2026-09-22 after the earlier connector failure. Release address remains https://lunarumap.github.io/lunaru-capture/abc/. Deployment must additionally pass tests/live-smoke.mjs, which checks exact public assets, camera recording, reload and playback in isolated browser storage.
+
+Direct Google Drive upload is NOT implemented or enabled: there is no OAuth client configuration for LUNARU. abc/GOOGLE-DRIVE-SETUP.md records the prerequisite and the small next implementation. Native ZIP sharing must not be advertised as direct cloud upload.

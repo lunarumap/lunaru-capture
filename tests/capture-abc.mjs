@@ -149,6 +149,30 @@ try{
   assert.ok(await page.evaluate(()=>state.methods.C.videos[0].chunks>0));
   await start();await page.waitForTimeout(1500);await finish();
   const A=await exportZip('A'),B=await exportZip('B'),C=await exportZip('C');
+  await page.evaluate(()=>{
+    window.shareCalls=0;window.cancelShare=true;window.shareInClick=false;
+    Object.defineProperty(navigator,'canShare',{configurable:true,value:({files})=>files?.length===1&&files[0].type==='application/zip'});
+    Object.defineProperty(navigator,'share',{configurable:true,value:async({files})=>{
+      window.shareCalls++;window.sharedFile=files[0];window.shareInClick=window.inShareClick===true;
+      if(window.cancelShare)throw new DOMException('Cancelled','AbortError');
+    }});
+  });
+  await page.click('[data-method="A"]');await page.click('[data-share="A"]');
+  await page.waitForFunction(()=>document.querySelector('[data-share="A"]').textContent.startsWith('Поделиться'));
+  assert.equal(await page.evaluate(()=>window.shareCalls),0,'Preparing ZIP must not lose user activation by opening share later');
+  const wrapShare=()=>page.evaluate(()=>{
+    const b=document.querySelector('[data-share="A"]'),click=b.onclick;
+    b.onclick=function(...args){window.inShareClick=true;try{return click.apply(this,args);}finally{window.inShareClick=false;}};
+  });
+  await wrapShare();await page.click('[data-share="A"]');
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Передача отменена'));
+  assert.equal(await page.evaluate(()=>state.methods.A.shots.filter(Boolean).length),32);
+  await page.evaluate(()=>{window.cancelShare=false;});await wrapShare();await page.click('[data-share="A"]');
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('ZIP передан выбранному приложению'));
+  assert.equal(await page.evaluate(()=>window.shareInClick),true,'Native share must run inside click handler');
+  const shared=unzipSync(new Uint8Array(await page.evaluate(async()=>[...new Uint8Array(await window.sharedFile.arrayBuffer())])));
+  for(const [name,data] of Object.entries(A.files))if(name.endsWith('.jpg'))assert.deepEqual(shared[name],data,'Shared photos must be byte-identical');
+  assert.equal(await page.evaluate(()=>state.methods.A.download.confirmed),false,'Share does not confirm cloud upload');
   assert.equal(A.manifest.frames.length,32);assert.equal(B.manifest.frames.length,40);
   assert.equal(C.manifest.videos.length,2);
   assert.equal(A.manifest.objectId,C.manifest.objectId);
@@ -330,6 +354,21 @@ try{
     const counts={};for(const name of ['projects','files','chunks'])counts[name]=await new Promise((resolve,reject)=>{const r=db.transaction(name).objectStore(name).getAll();r.onsuccess=()=>{if(r.result.some(v=>(name==='projects'?v.id:v.projectId)===id))reject(Error('Deleted media remained'));else resolve(r.result.length);};});db.close();return counts;
   },deleteId);
   assert.deepEqual(remainingAfter,remainingBefore,'Deletion removes only chosen object and all its media');
+  await page.evaluate(()=>localStorage.setItem('unrelated-cleanup-sentinel','preserve'));
+  const objectsBeforeClear=await page.locator('#savedObjects .savedObject').count();
+  const cancelledClear=new Promise(resolve=>page.once('dialog',async d=>{await d.dismiss();resolve();}));
+  await page.click('#clearSessionsBtn');await cancelledClear;
+  await page.locator('#clearSessionsBtn:enabled').waitFor();
+  assert.equal(await page.locator('#savedObjects .savedObject').count(),objectsBeforeClear,'Cancelling bulk clear preserves all sessions');
+  page.once('dialog',d=>d.accept());await page.click('#clearSessionsBtn');
+  await page.waitForFunction(()=>document.querySelector('#clearSessionsBtn').disabled&&document.querySelectorAll('#savedObjects .savedObject').length===0);
+  assert.deepEqual(await page.evaluate(async()=>{
+    const db=await new Promise(resolve=>{const r=indexedDB.open('lunaru_capture_abc_v014',1);r.onsuccess=()=>resolve(r.result);});
+    const counts=[];for(const name of ['projects','files','chunks'])counts.push(await new Promise(resolve=>{const r=db.transaction(name).objectStore(name).count();r.onsuccess=()=>resolve(r.result);}));db.close();return counts;
+  }),[0,0,0]);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('unrelated-cleanup-sentinel')),'preserve');
+  await page.click('#newBtn');await page.fill('#objectName','After cleanup');await page.click('[data-mode="indoor"]');await page.click('#createBtn');await start();await photo();await stop();
+  assert.equal(await page.evaluate(()=>state.methods.A.shots.filter(Boolean).length),1,'New capture works after bulk clear');
   assert.deepEqual(errors,[]);
   const report={passed:true,browser:browser.version(),camera:'simulated rear 640×480; no real phone',
     checks:['A 32 frames and retake','B 40-frame zigzag','C real MediaRecorder pause/resume and two original video files',
@@ -342,7 +381,9 @@ try{
       'saved video plays in app', 'real start error without stop event recovers without empty clip',
       'rear optical axis handles Euler branch and zenith', 'reticle layout at 375px and three screen heights',
       'real 3fps encoded probe is measured as slow', 'missing FPS counters preserve playable probe with honest warning',
-      'blocked autoplay recovers through direct tap', 'cancel deletion preserves data; confirmed deletion removes only selected object media'],
+      'blocked autoplay recovers through direct tap', 'cancel deletion preserves data; confirmed deletion removes only selected object media',
+      'ZIP share inside click, cancellation preserves originals, shared photos byte-identical, no false upload confirmation',
+      'bulk clear cancellation; all three stores empty after confirmation; unrelated storage preserved; new capture after clear'],
     artifacts:[A.file,B.file,C.file]};
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(e){

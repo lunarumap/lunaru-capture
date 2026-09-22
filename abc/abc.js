@@ -1,4 +1,4 @@
-/* TEST 0.17: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
+/* TEST 0.19: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
 /* global $, targets, state, current, shots, baseYaw, stream, started, lastAngles,
    stableSince, autoLock, selectedMode, show, save, refreshHome, openStation,
    shoot, render, onOrientation, stopGpsWatch, startGpsWatch, orientPermission,
@@ -6,9 +6,9 @@
    pad, norm, autoObjectName, fflate */
 "use strict";
 (() => {
-  const VERSION = '0.17.0', DATABASE = 'lunaru_capture_abc_v014';
+  const VERSION = '0.19.0', DATABASE = 'lunaru_capture_abc_v014';
   const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide();
-  let videoOptions=null, playbackUrl=null, videoWriteError=null, poleRearm=null;
+  let videoOptions=null, playbackUrl=null, videoWriteError=null, poleRearm=null, preparedShare=null;
   const originalTargets = targets.map(t => ({...t}));
   const zigzag = Array.from({length:12}, (_, sector) =>
     (sector % 2 ? [-45,0,45] : [45,0,-45]).map(pitch => ({
@@ -127,6 +127,9 @@
     projects=(await all('projects')).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
     $('savedObjects').replaceChildren();
     const usage=await sourceUsage();
+    const totalBytes=Object.values(usage).reduce((a,b)=>a+b,0);
+    $('clearSessionsBtn').disabled=!projects.length&&!totalBytes;
+    $('clearSessionsBtn').textContent=`Удалить все прошлые сеансы · ${projects.length} объектов · ${mb(totalBytes)}`;
     $('homeStorage').textContent=`Исходники в этом браузере: ${mb(Object.values(usage).reduce((a,b)=>a+b,0))}. ZIP в «Загрузках» занимает место отдельно. Удаление здесь не удаляет ZIP и Google Drive.`;
     for(const p of projects){
       const b=makeButton('', 'alt',async()=>{await writes;state=await read('projects',p.id);retakeIndex=null;mirror();await openStation();});
@@ -161,8 +164,24 @@
       }
     }));
     if(state?.id===id)state=null;
+    if(preparedShare?.projectId===id)preparedShare=null;
     await refreshHome();message('Объект удалён из этого браузера. Скачанные ZIP и Google Drive не затронуты.');
   }
+  $('clearSessionsBtn').onclick=safely(async()=>{
+    if(started||recorder||shooting||downloadBusy)throw new Error('Сначала остановите съёмку и отправку файлов.');
+    document.querySelectorAll('#home button').forEach(b=>b.disabled=true);
+    try{
+      await writes.catch(()=>{}); // A previously failed transaction must not poison a new cleanup attempt.
+      const list=await all('projects'),usage=await sourceUsage(),bytes=Object.values(usage).reduce((a,b)=>a+b,0);
+      if(!confirm(`Удалить ВСЕ прошлые сеансы LUNARU из этого браузера?\n\nОбъектов: ${list.length}. Исходники: ${mb(bytes)}.\nБудут удалены все их фото, видео и прогресс. Отменить нельзя.\n\nНужные ZIP должны быть уже сохранены и проверены. Google Диск и скачанные ZIP не затрагиваются.`))return;
+      await queue(()=>transaction(['projects','files','chunks'],tx=>{
+        for(const name of ['projects','files','chunks'])tx.objectStore(name).clear();
+      }));
+      state=null;preparedShare=null;projects=[];
+      if(playbackUrl){URL.revokeObjectURL(playbackUrl);playbackUrl=null;}
+      message('Все сеансы A/B/C удалены из этого браузера. Google Диск и ZIP в «Загрузках» остались.');
+    }finally{await refreshHome();$('newBtn').disabled=false;}
+  });
   async function storageInfo(){
     try{
       const [e,p]=await Promise.all([navigator.storage?.estimate(),navigator.storage?.persisted()]);
@@ -170,6 +189,7 @@
     }catch{$('storageStatus').textContent='Исходники хранятся в этом браузере. Обязательно скачайте наборы.';}
   }
   openStation=async()=>{
+    if(preparedShare&&(preparedShare.projectId!==state.id||preparedShare.revision!==state.methods[preparedShare.key].revision))preparedShare=null;
     mirror();show('stationStart');
     $('captureUi').classList.remove('active');$('actions').classList.remove('active');
     $('stationTitle').textContent='Одна точка · S01';$('stationObject').textContent=state.objectName;
@@ -190,6 +210,8 @@
     renderExports();storageInfo();
   };
   function renderExports(){
+    for(const id of ['startStationBtn','changeModeBtn','finishObjectBtn'])$(id).disabled=downloadBusy;
+    document.querySelectorAll('#methodChooser button').forEach(b=>b.disabled=downloadBusy);
     $('exportPanel').replaceChildren();
     for(const key of Object.keys(METHODS)){
       const m=state.methods[key],count=m.shots.filter(Boolean).length+m.videos.filter(v=>v.chunks>0).length;
@@ -199,6 +221,14 @@
       info.textContent=count ? `Сохранено на устройстве: ${summary(key)}. ${downloadText(m)}` : 'Материала пока нет.';
       const b=makeButton(`Скачать ${key} · ZIP`, 'alt',()=>exportSet(key));b.disabled=!count || downloadBusy;
       box.append(title,info,b);
+      const ready=preparedShare?.projectId===state.id&&preparedShare.key===key&&preparedShare.revision===m.revision;
+      if(navigator.share&&navigator.canShare){
+        const share=makeButton(ready?'Поделиться ZIP → выбрать Google Диск':`Подготовить ${key} для отправки на Диск`,'alt',()=>ready?sharePrepared(key):exportSet(key,'share'));
+        share.dataset.share=key;share.disabled=!count||downloadBusy;box.append(share);
+        const hint=document.createElement('small');hint.textContent=ready?'ZIP готов. Нажмите ещё раз, выберите Диск в меню телефона и папку назначения.':'Передача через меню телефона. Диск появится, если его приложение поддерживает передачу ZIP. Исходники остаются здесь.';box.append(hint);
+      }else{
+        const hint=document.createElement('small');hint.textContent='Этот браузер не поддерживает передачу файла. Скачайте ZIP → «Файлы»/«Загрузки» → Поделиться → Google Диск.';box.append(hint);
+      }
       if(key==='C')for(const v of m.videos.filter(v=>v.chunks>0)){
         box.append(makeButton(`▶ Проверить ${v.filename}`, 'alt',()=>playSavedVideo(v)));
       }
@@ -346,6 +376,7 @@
     $('captureUi').classList.remove('active');$('actions').classList.remove('active');
   }
   $('startStationBtn').onclick=safely(async()=>{
+    preparedShare=null;
     // iOS requires requestPermission in the click stack, before any await/IDB work.
     const permission=orientPermission();
     $('startStationBtn').disabled=true;$('confirmCameraBtn').disabled=true;$('cancelCameraBtn').disabled=true;
@@ -703,8 +734,25 @@
     if(next){state.activeMethod=next;mirror();await persist();await openStation();message(`${completed} сохранён. Следующий — ${METHODS[next].title}. Оставайтесь на той же точке.`);}
     else message('Три способа доступны ниже. Скачайте каждый набор отдельно; полноту сферы проверим при сшивке.');
   });
-  async function exportSet(key){
+  async function sharePrepared(key){
+    const item=preparedShare;
+    if(!item||item.projectId!==state.id||item.key!==key||item.revision!==state.methods[key].revision)throw new Error('Набор изменился. Подготовьте ZIP заново.');
     if(downloadBusy)return;
+    if(!navigator.canShare?.({files:[item.file]})){message('Передача ZIP здесь недоступна. Нажмите «Скачать ZIP» и отправьте файл через «Файлы»/«Загрузки».');return;}
+    downloadBusy=true;
+    try{
+      // Must be called directly in this click, not after ZIP generation or IDB awaits.
+      const sharing=navigator.share({files:[item.file]});renderExports();await sharing;
+      message('ZIP передан выбранному приложению. Проверьте завершение загрузки на Google Диске. Исходники в LUNARU сохранены.');
+      preparedShare=null;
+    }catch(e){
+      if(e.name==='AbortError')message('Передача отменена. ZIP готов для повторной попытки; исходники сохранены.');
+      else message(`Не удалось передать ZIP: ${e.message}. Можно повторить или скачать файл обычной кнопкой. Исходники сохранены.`);
+    }finally{downloadBusy=false;renderExports();}
+  }
+  async function exportSet(key,delivery='download'){
+    if(downloadBusy)return;
+    if(delivery==='share')preparedShare=null;
     downloadBusy=true;renderExports();message(`Готовлю ${key}: исходники без уменьшения…`);
     try{
       await writes;const m=clone(state.methods[key]),folder=METHODS[key].folder;
@@ -750,9 +798,16 @@
         })().catch(e=>{zip.terminate();reject(e);});
       });
       await finished;
-      const blob=new Blob(parts,{type:'application/zip'}),url=URL.createObjectURL(blob);urls.add(url);
+      const blob=new Blob(parts,{type:'application/zip'});
       const slug=state.objectName.replace(/[^\p{L}\p{N}._-]+/gu,'_').slice(0,64)||'LUNARU';
       const filename=`${slug}_${folder}.zip`;
+      if(delivery==='share'){
+        const file=new File([blob],filename,{type:'application/zip'});
+        if(!navigator.canShare?.({files:[file]})){preparedShare=null;message('Этот браузер не передаёт ZIP. Используйте «Скачать ZIP», затем «Поделиться» в «Файлах»/«Загрузках».');return;}
+        preparedShare={projectId:state.id,key,revision:m.revision,file};
+        message('ZIP готов. Нажмите «Поделиться ZIP», выберите Google Диск и нужную папку.');return;
+      }
+      const url=URL.createObjectURL(blob);urls.add(url);
       const a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();
       state.methods[key].download={time:now(),filename,bytes:blob.size,revision:m.revision,confirmed:false};await persist();
       message(`${key}: скачивание передано браузеру. Откройте «Загрузки» и проверьте ZIP. Локальные исходники сохранены.`);

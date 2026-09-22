@@ -33,13 +33,13 @@ try{
     };window.ImageCapture=undefined;
   });
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base+'?v=0.17.0');await page.locator('#newBtn:enabled').waitFor();
-  assert.match(await page.textContent('header'),/TEST 0.17/);
+  await page.goto(base+'?v=0.19.0');await page.locator('#newBtn:enabled').waitFor();
+  assert.match(await page.textContent('header'),/TEST 0.19/);
   for(const file of ['index.html','abc.js','abc.css','capture-support.js']){
-    const remote=await page.evaluate(async f=>{const r=await fetch(f+'?v=0.17.0',{cache:'reload'});if(!r.ok)throw Error('HTTP '+r.status);return await r.text();},file);
+    const remote=await page.evaluate(async f=>{const r=await fetch(f+'?v=0.19.0',{cache:'reload'});if(!r.ok)throw Error('HTTP '+r.status);return await r.text();},file);
     assert.equal(remote,await fs.readFile(path.join(root,'abc',file),'utf8'),file+' must match tested source');
   }
-  await page.click('#newBtn');await page.fill('#objectName','HTTPS smoke 0.17');
+  await page.click('#newBtn');await page.fill('#objectName','HTTPS smoke 0.19');
   await page.click('[data-mode="indoor"]');await page.click('#createBtn');
   await page.click('[data-method="C"]');await page.click('#startStationBtn');
   await page.locator('#cameraReview.active').waitFor();await page.locator('#confirmCameraBtn:enabled').waitFor();
@@ -51,5 +51,5 @@ try{
   await page.evaluate(()=>{const v=document.querySelector('#savedVideo');v.muted=true;return v.play();});
   await page.waitForFunction(()=>document.querySelector('#savedVideo').currentTime>.2);
   assert.deepEqual(errors,[]);
-  console.log('PASS: HTTPS TEST 0.17 exact assets; real simulated-camera recording, reload and saved playback; no page errors. Physical phones not tested.');
+  console.log('PASS: HTTPS TEST 0.19 exact assets; real simulated-camera recording, reload and saved playback; no page errors. Physical phones not tested.');
 }finally{await browser.close();}
