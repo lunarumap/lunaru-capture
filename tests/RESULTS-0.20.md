@@ -46,6 +46,8 @@ PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
 FFLATE_MODULE=/path/to/node_modules/fflate node tests/field-020.mjs
 ```
 
-Public deployment is verified separately with `tests/live-smoke.mjs`: exact released HTML/JS/CSS/support assets, video recording, reload and saved playback over the stable HTTPS URL. Publication receipt is added after the deployment succeeds.
+Public deployment verified on 2026-09-22: release commit `f1e186d3f936a0610540b6396f8b6dfd340c258b`, tree `641960589680efb41139322e043700723acf1eea`, GitHub Pages workflow `35716522782` succeeded. `tests/live-smoke.mjs` passed: exact released HTML/JS/CSS/support assets, real MediaRecorder with simulated camera, reload and saved playback over the stable HTTPS URL. An independent request to https://lunarumap.github.io/lunaru-capture/abc/ without query parameters returned HTTP 200 and TEST 0.20. Physical phones were not available to this automated check.
+
+The existing shared links document and Capture rows in the LUNARU journal were updated in place to TEST 0.20 and read back. Both preserve the same public Capture URL; the Sima-Land tour link remains unchanged. No site-data clearing is required to update the app.
 
 Next physical check is small: on iPhone, save three real A photos and three B photos, reopen and inspect the exported JPEGs; on A3X, verify any recovery message keeps the same frame and the explicit fallback continues. No need to repeat full stations before these checks succeed. Direct Drive upload remains unconfigured; physical behavior and sensor feel require phone tests.
