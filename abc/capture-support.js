@@ -8,6 +8,52 @@ window.LunaruCaptureSupport = (() => {
       timer = setTimeout(() => reject(new DOMException(message, 'TimeoutError')), ms);
     })]).finally(() => clearTimeout(timer));
   }
+  function cameraError(message, name='CameraFrameError') {
+    return Object.assign(new Error(message), {name});
+  }
+  function assertLive(track) {
+    if (!track || track.readyState !== 'live' || track.enabled === false || track.muted)
+      throw cameraError('Камера не передаёт изображение. Проверьте разрешение камеры в браузере.');
+  }
+  async function freshFrame(video, track) {
+    assertLive(track);
+    if (video.paused) await deadline(video.play(), 3000, 'Не удалось возобновить изображение камеры.');
+    let callback, timer;
+    try {
+      await deadline(new Promise(resolve => {
+        if (video.requestVideoFrameCallback) callback=video.requestVideoFrameCallback(resolve);
+        else {
+          const before=video.currentTime;
+          timer=setInterval(()=>{if(video.readyState>=2 && video.currentTime>before)resolve();},50);
+        }
+      }),2500,'Камера не выдаёт новые кадры. Восстановите камеру.');
+    } catch(e) { throw cameraError(e.message); }
+    finally { if(callback!=null)video.cancelVideoFrameCallback?.(callback);clearInterval(timer); }
+    assertLive(track);
+    if(video.readyState<2 || !video.videoWidth || !video.videoHeight)
+      throw cameraError('Камера ещё не передала изображение.');
+  }
+  function checkPixels(source) {
+    // Small diagnostic sample only; the saved original is never resized.
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=24;
+    try {
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(source,0,0,24,24);
+      const pixels=ctx.getImageData(0,0,24,24).data;
+      let max=0;
+      for(let i=0;i<pixels.length;i+=4)max=Math.max(max,pixels[i],pixels[i+1],pixels[i+2]);
+      if(max<=1)throw cameraError('Получен полностью чёрный кадр. Проверьте объектив и разрешение камеры; кадр не засчитан.','BlackFrameError');
+    } finally { canvas.width=canvas.height=1; }
+  }
+  async function inspectPhoto(blob) {
+    let bitmap;
+    try { if(window.createImageBitmap)bitmap=await createImageBitmap(blob); } catch { /* Image decoder fallback. */ }
+    if(bitmap){try{checkPixels(bitmap);return {width:bitmap.width,height:bitmap.height};}finally{bitmap.close();}}
+    const img=new Image(),url=URL.createObjectURL(blob);
+    try {
+      await deadline(new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(cameraError('Не удалось прочитать снимок.'));img.src=url;}),4000,'Снимок не декодирован.');
+      checkPixels(img);return {width:img.naturalWidth,height:img.naturalHeight};
+    } finally { img.src='';URL.revokeObjectURL(url); }
+  }
   // W3C intrinsic Z-X-Y device orientation; rear camera looks along device -Z.
   // https://www.w3.org/TR/orientation-event/#a-1-calculating-compass-heading
   function cameraPose({alpha,beta,gamma}) {
@@ -107,13 +153,13 @@ window.LunaruCaptureSupport = (() => {
   class PhotoGuide {
     reset() { this.filtered = null; this.key = null; this.since = null; this.inside = false; }
     constructor() { this.reset(); }
-    sample(raw, target, key, time) {
+    sample(raw, target, key, time, smoothingMs=85) {
       const wrap = n => ((n + 540) % 360) - 180;
       const dt = this.filtered ? time - this.filtered.time : 0;
       let speed = 0;
       if (!this.filtered || dt > 350 || dt <= 0) this.filtered = {...raw, time};
       else {
-        const weight = 1 - Math.exp(-dt / 85);
+        const weight = 1 - Math.exp(-dt / smoothingMs);
         const dy = wrap(raw.yaw - this.filtered.yaw) * weight;
         const dp = (raw.pitch - this.filtered.pitch) * weight;
         speed = Math.max(target.verticalOnly ? 0 : Math.abs(dy), Math.abs(dp)) / dt * 1000;
@@ -131,5 +177,5 @@ window.LunaruCaptureSupport = (() => {
       return {dy, dp, good:this.inside, progress:this.since===null?0:Math.min(1,(time-this.since)/450), ready:this.since !== null && time-this.since >= 450};
     }
   }
-  return {delay, deadline, recorderOptions, inspectVideo, probe, PhotoGuide, cameraPose};
+  return {delay, deadline, recorderOptions, inspectVideo, probe, PhotoGuide, cameraPose, assertLive, freshFrame, checkPixels, inspectPhoto};
 })();

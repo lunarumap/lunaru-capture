@@ -219,7 +219,7 @@ try{
     window.ImageCapture=class {
       async getPhotoCapabilities(){return {imageWidth:{max:2000},imageHeight:{max:1500}};}
       async takePhoto(){
-        const canvas=document.createElement('canvas');canvas.width=1200;canvas.height=1600;
+        const canvas=document.createElement('canvas');canvas.width=1200;canvas.height=1600;canvas.getContext('2d').fillStyle='orange';canvas.getContext('2d').fillRect(0,0,1200,1600);
         return new Promise(r=>canvas.toBlob(r,'image/jpeg'));
       }
     };
@@ -228,9 +228,10 @@ try{
   assert.deepEqual(await page.evaluate(()=>{const f=state.methods.B.shots.at(-1);return [f.width,f.height,f.source];}),[1200,1600,'image-capture']);
   await page.evaluate(()=>{ImageCapture.prototype.takePhoto=async()=>{throw new Error('Native photo test failure');};});
   await start();await page.click('#retakeBtn');await page.click('#manualBtn');
-  await page.locator('#cameraReview.active').waitFor();
-  assert.match(await page.textContent('#photoInfo'),/не смогло сделать снимок/);
-  await page.click('#confirmCameraBtn');await photo();await stop();
+  await page.locator('#captureIssue:not([hidden])').waitFor();
+  assert.match(await page.textContent('#captureIssueText'),/Фото камеры недоступно/);
+  assert.equal(await page.locator('#captureUi.active').count(),1);
+  await page.click('#useVideoFrameBtn');await page.locator('#captureIssue[hidden]').waitFor({state:'attached'});await photo();await stop();
   assert.equal(await page.evaluate(()=>state.methods.B.shots.at(-1).source),'video-frame');
 
   // Encoder allocation can fail even when isTypeSupported succeeds.

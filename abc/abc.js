@@ -1,4 +1,4 @@
-/* TEST 0.19: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
+/* TEST 0.20: additive A/B/C experiment. base-013.js is the unchanged TEST 0.13. */
 /* global $, targets, state, current, shots, baseYaw, stream, started, lastAngles,
    stableSince, autoLock, selectedMode, show, save, refreshHome, openStation,
    shoot, render, onOrientation, stopGpsWatch, startGpsWatch, orientPermission,
@@ -6,10 +6,12 @@
    pad, norm, autoObjectName, fflate */
 "use strict";
 (() => {
-  const VERSION = '0.19.0', DATABASE = 'lunaru_capture_abc_v014';
-  const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide();
+  const VERSION = '0.20.0', DATABASE = 'lunaru_capture_abc_v014';
+  const support=window.LunaruCaptureSupport, photoGuide=new support.PhotoGuide(), videoGuide=new support.PhotoGuide();
   let videoOptions=null, playbackUrl=null, videoWriteError=null, poleRearm=null, preparedShare=null;
+  let captureIssue=null, recovering=false, namesOpen=false, namesResumeVideo=false, shareDenied=false;
   const originalTargets = targets.map(t => ({...t}));
+  originalTargets.slice(-4).forEach((t,i)=>t.label=(i<2?'Зенит':'Надир')+` ${i%2+1}/2`);
   const zigzag = Array.from({length:12}, (_, sector) =>
     (sector % 2 ? [-45,0,45] : [45,0,-45]).map(pitch => ({
       yawOffset:sector*30, pitch, sector:sector+1,
@@ -134,7 +136,7 @@
     for(const p of projects){
       const b=makeButton('', 'alt',async()=>{await writes;state=await read('projects',p.id);retakeIndex=null;mirror();await openStation();});
       const title=document.createElement('b');title.textContent=p.objectName;
-      const desc=document.createElement('span');desc.textContent=`S01 · A: ${p.methods.A.shots.filter(Boolean).length}/32 · B: ${p.methods.B.shots.filter(Boolean).length}/40 · C: ${p.methods.C.videos.filter(v=>v.chunks>0).length} видео`;
+      const desc=document.createElement('span');desc.textContent=`Станция S01${p.stationName?' · '+p.stationName:''} · A: ${p.methods.A.shots.filter(Boolean).length}/32 · B: ${p.methods.B.shots.filter(Boolean).length}/40 · C: ${p.methods.C.videos.filter(v=>v.chunks>0).length} видео`;
       desc.textContent+=` · ${mb(usage[p.id]||0)}`;
       const row=document.createElement('div');row.className='savedObject';row.dataset.projectId=p.id;
       const remove=makeButton('Удалить с телефона','deleteObject',()=>deleteProject(p.id));
@@ -192,7 +194,7 @@
     if(preparedShare&&(preparedShare.projectId!==state.id||preparedShare.revision!==state.methods[preparedShare.key].revision))preparedShare=null;
     mirror();show('stationStart');
     $('captureUi').classList.remove('active');$('actions').classList.remove('active');
-    $('stationTitle').textContent='Одна точка · S01';$('stationObject').textContent=state.objectName;
+    $('stationTitle').textContent='Станция S01';$('stationObject').textContent=state.objectName;
     $('stationName').value=state.stationName||'';
     $('stationMode').textContent=({'indoor':'Помещение','outdoor-gps':'Улица · GPS','outdoor-no-gps':'Улица · без GPS'})[state.mode];
     $('gpsLine').textContent=state.gps ? `Координаты сохранены · ±${Math.round(state.gps.accuracy)} м` : 'Снимайте все три способа с одного места.';
@@ -210,7 +212,7 @@
     renderExports();storageInfo();
   };
   function renderExports(){
-    for(const id of ['startStationBtn','changeModeBtn','finishObjectBtn'])$(id).disabled=downloadBusy;
+    for(const id of ['startStationBtn','changeModeBtn','finishObjectBtn','editNamesBtn'])$(id).disabled=downloadBusy;
     document.querySelectorAll('#methodChooser button').forEach(b=>b.disabled=downloadBusy);
     $('exportPanel').replaceChildren();
     for(const key of Object.keys(METHODS)){
@@ -219,15 +221,15 @@
       const title=document.createElement('strong');title.textContent=METHODS[key].folder;
       const info=document.createElement('small');
       info.textContent=count ? `Сохранено на устройстве: ${summary(key)}. ${downloadText(m)}` : 'Материала пока нет.';
-      const b=makeButton(`Скачать ${key} · ZIP`, 'alt',()=>exportSet(key));b.disabled=!count || downloadBusy;
-      box.append(title,info,b);
       const ready=preparedShare?.projectId===state.id&&preparedShare.key===key&&preparedShare.revision===m.revision;
-      if(navigator.share&&navigator.canShare){
+      const b=makeButton(ready?'Скачать готовый ZIP':`Скачать ${key} · ZIP`, 'alt',()=>ready?downloadPrepared(key):exportSet(key));b.disabled=!count || downloadBusy;
+      box.append(title,info,b);
+      if(navigator.share&&navigator.canShare&&!shareDenied){
         const share=makeButton(ready?'Поделиться ZIP → выбрать Google Диск':`Подготовить ${key} для отправки на Диск`,'alt',()=>ready?sharePrepared(key):exportSet(key,'share'));
         share.dataset.share=key;share.disabled=!count||downloadBusy;box.append(share);
         const hint=document.createElement('small');hint.textContent=ready?'ZIP готов. Нажмите ещё раз, выберите Диск в меню телефона и папку назначения.':'Передача через меню телефона. Диск появится, если его приложение поддерживает передачу ZIP. Исходники остаются здесь.';box.append(hint);
       }else{
-        const hint=document.createElement('small');hint.textContent='Этот браузер не поддерживает передачу файла. Скачайте ZIP → «Файлы»/«Загрузки» → Поделиться → Google Диск.';box.append(hint);
+        const hint=document.createElement('small');hint.textContent=(shareDenied?'Браузер запретил передачу ZIP через меню телефона. ':'Передача ZIP через меню здесь недоступна. ')+(ready?'Архив уже готов — скачайте его кнопкой выше. ':'Скачайте ZIP кнопкой выше. ')+'Затем «Файлы»/«Загрузки» → Поделиться → Google Диск. Прямая загрузка из LUNARU пока не подключена.';box.append(hint);
       }
       if(key==='C')for(const v of m.videos.filter(v=>v.chunks>0)){
         box.append(makeButton(`▶ Проверить ${v.filename}`, 'alt',()=>playSavedVideo(v)));
@@ -274,7 +276,7 @@
     if(!selectedMode)return;
     await writes;
     if($('createBtn').textContent==='СОХРАНИТЬ РЕЖИМ' && state){
-      state.objectName=$('objectName').value.trim() || state.objectName;state.mode=selectedMode;
+      await renameStation($('objectName').value,state.stationName||'');state.mode=selectedMode;
     }else{
       state={id:crypto.randomUUID(),schema:1,version:VERSION,objectName:$('objectName').value.trim()||autoObjectName(),
         mode:selectedMode,station:1,stationName:'',gps:null,createdAt:now(),updatedAt:now(),
@@ -282,8 +284,102 @@
     }
     retakeIndex=null;mirror();await persist();await openStation();
   });
-  $('finishObjectBtn').textContent='К СПИСКУ ОБЪЕКТОВ · ДАННЫЕ ОСТАНУТСЯ';
+  $('finishObjectBtn').textContent='К списку объектов / очистка';
   $('finishObjectBtn').onclick=safely(async()=>{await persist();show('home');await refreshHome();message('Все исходники остаются в объекте. Их можно доснять и скачать.');});
+
+  async function renameStation(objectName,stationName){
+    if(downloadBusy)throw new Error('Дождитесь окончания подготовки архива.');
+    const id=state.id;
+    await queue(async()=>{
+      if(state?.id!==id)throw new Error('Объект уже изменился.');
+      const next=clone(state);
+      next.objectName=objectName.trim().slice(0,100)||next.objectName;
+      next.stationName=stationName.trim().slice(0,100);next.updatedAt=now();
+      if(next.objectName!==state.objectName||next.stationName!==state.stationName)
+        for(const m of Object.values(next.methods)){m.revision++;m.download=null;}
+      await transaction(['projects'],tx=>tx.objectStore('projects').put(next));state=next;
+    });
+    preparedShare=null;
+    $('stationName').value=state.stationName;$('stationObject').textContent=state.objectName;
+    $('objectPill').textContent=state.objectName+' ✎';
+  }
+  async function closeNames(){
+    namesOpen=false;$('namesModal').classList.remove('active');photoGuide.reset();videoGuide.reset();
+    if(namesResumeVideo&&recorder?.state==='paused')await togglePause();
+    namesResumeVideo=false;
+    if(!started)await openStation();else render();
+  }
+  const editNames=safely(async()=>{
+    if(!state||downloadBusy||stopping)return;
+    namesOpen=true;namesResumeVideo=recorder?.state==='recording';
+    if(namesResumeVideo)await togglePause();
+    $('editObjectName').value=state.objectName;$('editStationName').value=state.stationName||'';
+    $('namesHint').textContent=namesResumeVideo?'Видео на паузе. После закрытия этого окна запись продолжится.':'Исходники и номер станции сохранятся.';
+    $('namesModal').classList.add('active');
+  });
+  $('editNamesBtn').onclick=editNames;$('objectPill').onclick=editNames;
+  $('stationName').onchange=safely(()=>renameStation(state.objectName,$('stationName').value));
+  $('saveNamesBtn').onclick=safely(async()=>{await renameStation($('editObjectName').value,$('editStationName').value);await closeNames();message('Названия сохранены. Исходники остались в этой станции.');});
+  $('cancelNamesBtn').onclick=safely(closeNames);
+  function diagnose(type,error){
+    const id=state?.id;if(!id)return;
+    const track=stream?.getVideoTracks()[0];
+    const entry={time:now(),type,method:state.activeMethod,frame:current+1,name:error?.name,message:error?.message,
+      track:track?{readyState:track.readyState,muted:track.muted,enabled:track.enabled}:null};
+    queue(async()=>{
+      if(state?.id!==id)return;
+      const next=clone(state);next.diagnostics=[...(next.diagnostics||[]),entry].slice(-80);
+      await transaction(['projects'],tx=>tx.objectStore('projects').put(next));state=next;
+    }).catch(()=>{});
+  }
+  function showCaptureIssue(kind,error){
+    captureIssue={kind,error};autoLock=true;photoGuide.reset();
+    $('captureIssue').hidden=false;
+    $('captureIssueTitle').textContent=`Кадр ${current+1} не снят · станция сохранена`;
+    $('captureIssueText').textContent=kind==='photo-api'
+      ? `Фото камеры недоступно (${error.name}). Можно повторить или явно выбрать кадр видеопотока ${$('video').videoWidth} × ${$('video').videoHeight}. Это не полноразмерная фотография камеры.`
+      : error.message;
+    $('retryPhotoBtn').textContent=kind==='photo-api'?'Повторить фото камеры':'Восстановить камеру';
+    $('useVideoFrameBtn').hidden=kind!=='photo-api';
+    $('manualBtn').disabled=true;diagnose(kind,error);
+    message('Съёмка приостановлена на том же кадре. Сохранённые исходники на месте.');
+  }
+  async function recoverPhoto(useFrame){
+    if(recovering||stopping||!started)return;
+    recovering=true;
+    $('retryPhotoBtn').disabled=$('useVideoFrameBtn').disabled=true;
+    $('modeCaptureBtn').disabled=$('finishStationBtn').disabled=$('objectPill').disabled=true;
+    try{
+      try{
+        await support.freshFrame($('video'),stream?.getVideoTracks()[0]);support.checkPixels($('video'));
+        const c=stream.getVideoTracks()[0].getSettings(),previous=method().camera;
+        if(previous?.deviceId&&previous.deviceId!==c.deviceId || previous?.zoom!=null&&c.zoom!=null&&Math.abs(previous.zoom-c.zoom)>.01)throw new Error('Нужно восстановить прежнюю камеру.');
+      }
+      catch{
+        stream?.getTracks().forEach(t=>t.stop());stream=null;
+        stream=await openRearCamera();$('video').srcObject=stream;await $('video').play();
+        await support.freshFrame($('video'),stream.getVideoTracks()[0]);support.checkPixels($('video'));
+      }
+      if(useFrame){photoAPI=null;photoSource='video-frame';photoSettings={};}
+      else if(photoSource==='image-capture'){
+        await setupPhoto();
+        if(photoSource!=='image-capture'){
+          photoSource='image-capture';showCaptureIssue('photo-api',new Error('Фото-API недоступно после восстановления камеры.'));return;
+        }
+      }
+      readyCamera=cameraSnapshot();method().camera=clone(readyCamera);method().photoSource=photoSource;
+      method().photoRequest=clone(photoSettings);
+      await persist();captureIssue=null;$('captureIssue').hidden=true;photoGuide.reset();autoLock=false;render();
+      $('captureFormat').textContent=`${photoSource==='image-capture'?'Фото API камеры':'Кадр видеопотока'} · ${readyCamera.width} × ${readyCamera.height}`;
+      message(`Камера готова. Повторите кадр ${current+1}; счётчик не увеличивался.`);
+    }catch(e){showCaptureIssue('camera',e);}
+    finally{
+      recovering=false;$('retryPhotoBtn').disabled=$('useVideoFrameBtn').disabled=false;
+      $('modeCaptureBtn').disabled=$('finishStationBtn').disabled=$('objectPill').disabled=false;
+    }
+  }
+  $('retryPhotoBtn').onclick=safely(()=>recoverPhoto(false));
+  $('useVideoFrameBtn').onclick=safely(()=>recoverPhoto(true));
 
   async function openRearCamera(){
     if(!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)throw new Error('Для камеры откройте этот адрес по HTTPS в Chrome.');
@@ -369,6 +465,7 @@
   }
   async function releaseCamera(){
     reviewOpen=false;started=false;clearInterval(guardTimer);guardTimer=null;
+    captureIssue=null;$('captureIssue').hidden=true;$('recordingBanner').hidden=true;
     stopGpsWatch();
     if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
     $('video').srcObject=null;
@@ -384,6 +481,7 @@
       message('Открываю заднюю камеру…');state.stationName=$('stationName').value.trim();await persist();
       sensorAllowed=await permission;await tryPortraitLock();photoGuide.reset();
       stream=await openRearCamera();$('video').srcObject=stream;await $('video').play();
+      await support.freshFrame($('video'),stream.getVideoTracks()[0]);support.checkPixels($('video'));
       readyCamera=cameraSnapshot();
       if(!readyCamera.width || !readyCamera.height)throw new Error('Камера не передаёт изображение.');
       reviewOpen=true;show('cameraReview');$('reviewTitle').textContent=spec().title;
@@ -404,6 +502,7 @@
     try{
       photoGuide.reset();
       if(!stream)throw new Error('Камера закрыта. Откройте её снова.');
+      await support.freshFrame($('video'),stream.getVideoTracks()[0]);support.checkPixels($('video'));
       if(!method().orientationModel){
         const hasOriginals=method().shots.some(Boolean)||method().videos.some(v=>v.chunks>0);
         method().orientationModel=hasOriginals&&method().baseYaw!=null?'legacy-013':'rear-camera-v1';
@@ -414,12 +513,15 @@
       if(state.activeMethod==='C'){message('Запускаю запись и ожидаю первые сохранённые данные…');await startVideo();}
       document.querySelectorAll('.screen').forEach(el=>el.classList.remove('active'));
       $('captureUi').classList.add('active');$('actions').classList.add('active');
-      $('objectPill').textContent=state.objectName;$('stationPill').textContent=`S01-${state.activeMethod}`;
+      $('objectPill').textContent=state.objectName+' ✎';$('stationPill').textContent=`S01-${state.activeMethod}`;
       $('captureMethod').textContent=spec().title;
       $('captureFormat').textContent=state.activeMethod==='C' ? formatCamera(readyCamera) : `${photoSource==='image-capture'?'Фото API камеры':'Кадр видеопотока'} · ${readyCamera.width} × ${readyCamera.height}`;
       $('retakeBtn').textContent=state.activeMethod==='C' ? 'Пауза видео' : 'Переснять последний';
       $('manualBtn').textContent=state.activeMethod==='C' ? 'Следующее направление' : 'Снять вручную';
-      $('finishStationBtn').textContent='Завершить способ';
+      $('finishStationBtn').textContent=state.activeMethod==='A'?'Завершить A → к B':state.activeMethod==='B'?'Завершить B → к C':'Завершить C → к наборам';
+      $('modeCaptureBtn').textContent=state.activeMethod==='C'?'Сохранить видео · продолжить позже':'Прервать · доснять позже';
+      $('recordingBanner').hidden=state.activeMethod!=='C';
+      $('recordingBanner').textContent='● ИДЁТ ЗАПИСЬ ВИДЕО';
       started=true;stopping=false;
       if(state.mode==='outdoor-gps')startGpsWatch();else stopGpsWatch();
       checkVisualOrientation();render();
@@ -433,12 +535,18 @@
     finally{$('confirmCameraBtn').disabled=false;$('cancelCameraBtn').disabled=false;}
   });
   async function checkCamera(){
-    if(!stream || stopping)return;
+    if(!stream || stopping || shooting || captureIssue || namesOpen)return;
     if(started && recorder?.state==='inactive' && !videoError)videoError=new Error('Браузер прервал запись видео.');
     if(recorder && videoError){await stopPass(false);return;}
     const t=stream.getVideoTracks()[0], c=t.getSettings(), initial=method().camera;
+    if(t.muted || t.enabled===false || $('video').paused){
+      const error=new Error('Браузер приостановил камеру. Проверьте значок камеры в адресной строке и восстановите изображение.');
+      if(state.activeMethod!=='C'){showCaptureIssue('camera',error);return;}
+      diagnose('video-camera-paused',error);await stopPass(false);message('Камера прервалась. Уже записанное видео сохранено; откройте камеру для продолжения.');return;
+    }
     if(t.readyState==='ended' || (initial.deviceId && c.deviceId!==initial.deviceId) ||
         (initial.zoom!=null && c.zoom!=null && Math.abs(initial.zoom-c.zoom)>.01)){
+      if(state.activeMethod!=='C'){showCaptureIssue('camera',new Error('Камера или зум изменились. Восстановите прежнюю камеру.'));return;}
       await stopPass(false);message('Камера или зум изменились. Проход остановлен; сохранённые исходники доступны.');
     }
   }
@@ -449,7 +557,7 @@
     for(const id of ['sensorReviewBtn','sensorCaptureBtn'])$(id).hidden=!!sensorLive() || typeof window.DeviceOrientationEvent?.requestPermission!=='function';
     $('sensorInfo').textContent=text+(method().orientationModel==='legacy-013'?' · Старый набор: сохранена прежняя система углов. Новый прицел проверяйте в новом объекте.':'');
     $('captureSensors').textContent=sensorLive()?'Датчики работают':'Нет ориентации · ручная съёмка';
-    if(started && !sensorLive()){
+    if(started && !sensorLive() && !captureIssue && !namesOpen){
       stableSince=0;autoLock=false;guideDwell=0;photoGuide.reset();manualGuide();
     }
   }
@@ -458,6 +566,7 @@
     message(sensorAllowed?'Доступ к датчикам разрешён. Плавно поверните телефон.':'Доступ не получен. Откройте ссылку в Safari/Chrome и разрешите датчики; ручная съёмка доступна.');
   });
   function manualGuide(){
+    if(captureIssue||namesOpen)return;
     $('aimDot').hidden=true;$('aimProgress').style.strokeDashoffset='314';
     const t=targets[current];if(!t)return;
     $('guideMain').textContent=t.label;
@@ -467,36 +576,39 @@
   const originalRender=render;
   render=()=>{
     if(!state)return;
-    originalRender();photoGuide.reset();$('aimDot').hidden=true;$('aimProgress').style.strokeDashoffset='314';
+    originalRender();photoGuide.reset();videoGuide.reset();$('aimDot').hidden=true;$('aimProgress').style.strokeDashoffset='314';
     const m=method();
     $('counter').textContent=state.activeMethod==='C' ? duration(videoElapsed()) : `${m.shots.filter(Boolean).length} / ${targets.length}`;
     if(retakeIndex!=null)$('guideSub').textContent=`Переснять кадр ${retakeIndex+1}. Старый снимок сохранён до замены.`;
     if(!targets[current]){
       $('guideMain').textContent=state.activeMethod==='C' ? 'Обход выполнен · остановите запись' : 'Все запланированные кадры сняты';
-      $('guideSub').textContent='Полнота сферы ещё не проверена. Нажмите «Завершить способ».';
+      $('guideSub').textContent='Полнота сферы ещё не проверена. Завершите набор кнопкой внизу.';
     }else if(!sensorLive())manualGuide();
-    $('manualBtn').disabled=!targets[current] || shooting;
-    $('retakeBtn').disabled=shooting || (state.activeMethod!=='C' && !m.shots.filter(Boolean).length);
+    else if(state.activeMethod==='C')$('guideSub').textContent=`Видео непрерывно · направление ${current+1}/${targets.length}. Двигайтесь плавно.`;
+    $('manualBtn').disabled=!targets[current] || shooting || !!captureIssue || namesOpen;
+    $('retakeBtn').disabled=shooting || !!captureIssue || namesOpen || (state.activeMethod!=='C' && !m.shots.filter(Boolean).length);
+    if(captureIssue)autoLock=true;
     $('durableStatus').textContent=state.activeMethod==='C'
       ? `Видео записывается частями на устройство; сохранено ${duration(activeVideo?.savedMs||0)}`
       : `На устройстве: ${m.shots.filter(Boolean).length} кадров`;
   };
   function guidePhoto(){
+    if(captureIssue||namesOpen)return;
     const t=targets[current];if(!t || !sensorLive())return;
     if(t.verticalOnly&&targets[current-1]?.verticalOnly&&targets[current-1].pitch===t.pitch){
       if(poleRearm!==current){
         if(Math.abs(lastAngles.pitch)<55)poleRearm=current;
-        else{drawAim(0,lastAngles.pitch,false);$('guideMain').textContent='Смените направление для второго кадра';$('guideSub').textContent='Верните камеру к горизонту, немного поверните и снова наведите вверх/вниз.';return;}
+        else{drawAim(0,lastAngles.pitch,false);$('guideMain').textContent=t.label+' · другой ракурс';$('guideSub').textContent='Второй кадр предусмотрен сеткой. Вернитесь к горизонту, повернитесь примерно на 90° и снова наведите на потолок/небо или пол.';return;}
       }
     }
     if(baseYaw===null && !t.verticalOnly){
-      if(Math.abs(lastAngles.pitch)>18){
-        $('guideMain').textContent='Сначала направьте камеру на горизонт';
+      if(Math.abs(lastAngles.pitch)>(state.activeMethod==='A'?18:70)){
+        $('guideMain').textContent=state.activeMethod==='A'?'Сначала направьте камеру на горизонт':'Начните с верхней точки · наклон +45°';
         $('directionArrow').textContent=lastAngles.pitch>0?'↓':'↑';return;
       }
       baseYaw=lastAngles.yaw;state.baseYaw=baseYaw;method().baseYaw=baseYaw;save();
     }
-    const guide=photoGuide.sample(lastAngles,{...t,yaw:norm((baseYaw||0)+t.yawOffset)},current,performance.now());
+    const guide=photoGuide.sample(lastAngles,{...t,yaw:norm((baseYaw||0)+t.yawOffset)},current,performance.now(),state.activeMethod==='B'?160:85);
     drawAim(guide.dy,guide.dp,guide.good,guide.progress);
     $('target').classList.toggle('good',guide.good);
     if(guide.good){
@@ -524,15 +636,15 @@
     lastSensor={alpha:e.alpha,beta:e.beta,gamma:e.gamma,heading,absolute:e.absolute===true,time:now(),received:performance.now()};
     lastAngles=state?.methods?.[state.activeMethod]?.orientationModel==='legacy-013'
       ? {yaw:norm(heading ?? (360-e.alpha)),pitch:Math.max(-90,Math.min(90,e.beta-90))}:pose;
-    if(!started || stopping || shooting || retakeIndex!=null || window.innerWidth>window.innerHeight)return;
+    if(!started || stopping || shooting || captureIssue || namesOpen || retakeIndex!=null || window.innerWidth>window.innerHeight)return;
     if(state.activeMethod!=='C'){guidePhoto();return;}
     if(!recorder || recorder.state!=='recording')return;
     const t=targets[current];if(!t)return;
     if(baseYaw===null){
-      if(Math.abs(lastAngles.pitch)>18){$('guideMain').textContent='Сначала направьте камеру на горизонт';return;}
+      if(Math.abs(lastAngles.pitch)>70){$('guideMain').textContent='Начните с верхней точки · наклон +45°';return;}
       baseYaw=lastAngles.yaw;state.baseYaw=baseYaw;method().baseYaw=baseYaw;save();
     }
-    const dy=((lastAngles.yaw-(baseYaw+t.yawOffset)+540)%360)-180,dp=lastAngles.pitch-t.pitch;
+    const {dy,dp}=videoGuide.sample(lastAngles,{...t,yaw:norm(baseYaw+t.yawOffset)},current,performance.now(),160);
     const good=Math.abs(dy)<10 && Math.abs(dp)<10;
     drawAim(dy,dp,good);
     $('target').classList.toggle('good',good);
@@ -547,27 +659,29 @@
     if(reviewOpen || started)updateSensorText();
     if(started && state.activeMethod==='C'){
       $('counter').textContent=`${recorder?.state==='paused'?'ПАУЗА':'● REC'} ${duration(videoElapsed())}`;
-      $('durableStatus').textContent=`${recorder?.state==='paused' ? 'Пауза · ' : ''}Сохранено на устройстве: ${duration(activeVideo?.savedMs||0)}. Перед закрытием — «Остановить и сохранить».`;
+      $('recordingBanner').textContent=recorder?.state==='paused'?'Ⅱ ВИДЕО НА ПАУЗЕ':'● ИДЁТ ЗАПИСЬ ВИДЕО';
+      $('durableStatus').textContent=`На устройстве: ${duration(activeVideo?.savedMs||0)}. Перед выходом — «Сохранить видео».`;
     }
   },500);
-  function canvasBlob(){
+  async function canvasBlob(){
     const v=$('video'),c=$('canvas');
-    if(!v.videoWidth || !v.videoHeight)throw new Error('Видеопоток не готов');
-    c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
-    return new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('Кадр не получен')),'image/jpeg',.95));
-  }
-  async function dimensions(blob){
-    const bitmap=await createImageBitmap(blob);const size={width:bitmap.width,height:bitmap.height};bitmap.close();return size;
+    await support.freshFrame(v,stream?.getVideoTracks()[0]);support.checkPixels(v);
+    try{
+      c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+      return await support.deadline(new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('Кадр не получен')),'image/jpeg',.95)),8000,'Кадр не удалось сохранить за 8 секунд.');
+    }finally{c.width=c.height=1;} // Release the full-resolution backing store on small phones.
   }
   shoot=async auto=>{
-    if(!started || stopping || shooting || state.activeMethod==='C' || !targets[current])return;
+    if(!started || stopping || shooting || captureIssue || namesOpen || state.activeMethod==='C' || !targets[current])return;
     if(window.innerWidth>window.innerHeight){message('Для прежней сетки TEST 0.13 держите телефон вертикально.');return;}
     shooting=true;$('manualBtn').disabled=true;$('retakeBtn').disabled=true;
     const index=current,time=now(),angles=orientation(),target={...targets[index],yaw:targets[index].verticalOnly || baseYaw===null ? null:norm(baseYaw+targets[index].yawOffset)};
     message(`Сохраняю кадр ${index+1}…`);
+    let committing=false;
     try{
       let blob;
       if(photoSource==='image-capture'){
+        await support.freshFrame($('video'),stream?.getVideoTracks()[0]);support.checkPixels($('video'));
         try{
           try{blob=await support.deadline(photoAPI.takePhoto(photoSettings),6000,'Фото-API не ответило за 6 секунд.');}
           catch(e){
@@ -576,17 +690,16 @@
           }
         }catch(e){
           // Explicit confirmation is required before switching from native photo to video frame.
-          started=false;photoAPI=null;photoSource='video-frame';reviewOpen=true;
-          $('captureUi').classList.remove('active');$('actions').classList.remove('active');show('cameraReview');
-          $('photoInfo').textContent=`Фото-API не смогло сделать снимок (${e.name || 'ошибка'}). ${photoDescription()} Нажмите «НАЧАТЬ ФОТОСЪЁМКУ», если этот режим подходит.`;
-          message('Кадр не добавлен. Подтвердите режим кадра видеопотока.');return;
+          showCaptureIssue('photo-api',e);return;
         }
       }else blob=await canvasBlob();
-      const size=await dimensions(blob),id=stamp();
+      const size=await support.inspectPhoto(blob),id=stamp();
+      if(photoSource==='video-frame')support.assertLive(stream?.getVideoTracks()[0]);
       const extension=({'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/heic':'heic','image/heif':'heif','image/avif':'avif'})[blob.type] || 'bin';
       const item={id,index:index+1,filename:`frame_${pad(index+1)}.${extension}`,time,method:state.activeMethod,
         ...size,bytes:blob.size,mimeType:blob.type,source:photoSource,photoRequest:clone(photoSettings),
         camera:clone(readyCamera),angles,target,auto:!!auto};
+      committing=true;
       await mediaCommit('files',{id,projectId:state.id,blob},m=>{
         m.shots[index]=item;m.currentFrame=Math.max(m.currentFrame,index+1);m.revision++;
         m.finished=m.shots.filter(Boolean).length===spec().grid.length;
@@ -596,16 +709,19 @@
       $('captureFormat').textContent=`${photoSource==='image-capture'?'Фото API камеры':'Кадр видеопотока'} · ${size.width} × ${size.height}`;
       message(`Кадр ${index+1} сохранён на устройстве · ${size.width} × ${size.height}`);
     }catch(e){
-      autoLock=true;stableSince=0;started=false;
-      retakeIndex=null;await releaseCamera();await openStation();report(e);
+      if(!committing){showCaptureIssue('camera',e);}
+      else{
+        autoLock=true;stableSince=0;started=false;
+        diagnose('photo-storage',e);retakeIndex=null;await releaseCamera();await openStation();report(e);
+      }
     }finally{shooting=false;render();}
   };
   $('manualBtn').onclick=safely(async()=>{
-    if(!started || stopping)return;
+    if(!started || stopping || captureIssue || namesOpen)return;
     if(state.activeMethod==='C')await advanceVideoGuide('manual');else await shoot(false);
   });
   $('retakeBtn').onclick=safely(async()=>{
-    if(!started || shooting || stopping)return;
+    if(!started || shooting || stopping || captureIssue || namesOpen)return;
     if(state.activeMethod==='C')return togglePause();
     if(retakeIndex!=null){retakeIndex=null;mirror();render();return;}
     if(!method().shots.length)return;
@@ -674,7 +790,7 @@
     }
   }
   async function advanceVideoGuide(source){
-    if(!targets[current] || recorder?.state!=='recording')return;
+    if(!targets[current] || namesOpen || recorder?.state!=='recording')return;
     guideDwell=0;const m=method();
     m.guideEvents.push({index:current,time:now(),videoId:activeVideo.id,elapsedMs:videoElapsed(),source,angles:orientation()});
     m.currentFrame=++current;state.currentFrame=current;await persist();render();
@@ -708,7 +824,7 @@
     let failure=null;
     try{
       // A photo already requested must commit before the camera is released.
-      while(shooting)await new Promise(resolve=>setTimeout(resolve,30));
+      while(shooting||recovering)await new Promise(resolve=>setTimeout(resolve,30));
       if(recorder)await stopVideo();
       retakeIndex=null;mirror();method().finished=finished || (state.activeMethod!=='C' && method().shots.filter(Boolean).length===targets.length);
       await persist();
@@ -721,9 +837,9 @@
   $('modeCaptureBtn').onclick=safely(()=>stopPass(false));
   $('finishStationBtn').onclick=()=>{
     if(shooting || stopping)return;
-    $('finishStationTitle').textContent=`Завершить способ ${state.activeMethod}?`;
+    $('finishStationTitle').textContent=`Завершить набор ${state.activeMethod}?`;
     $('finishStationText').textContent=`${summary(state.activeMethod)}. Это завершение прохода, а не проверка полноты сферы. Сохранённый материал останется доступен.`;
-    $('finishAnywayBtn').textContent='СОХРАНИТЬ И К СЛЕДУЮЩЕМУ СПОСОБУ';
+    $('finishAnywayBtn').textContent=state.activeMethod==='C'?'СОХРАНИТЬ ВИДЕО И К НАБОРАМ':'СОХРАНИТЬ И К СЛЕДУЮЩЕМУ СПОСОБУ';
     $('finishStationModal').classList.add('active');
   };
   $('finishAnywayBtn').onclick=safely(async()=>{
@@ -738,7 +854,7 @@
     const item=preparedShare;
     if(!item||item.projectId!==state.id||item.key!==key||item.revision!==state.methods[key].revision)throw new Error('Набор изменился. Подготовьте ZIP заново.');
     if(downloadBusy)return;
-    if(!navigator.canShare?.({files:[item.file]})){message('Передача ZIP здесь недоступна. Нажмите «Скачать ZIP» и отправьте файл через «Файлы»/«Загрузки».');return;}
+    if(!navigator.canShare?.({files:[item.file]})){shareDenied=true;renderExports();message('Передача ZIP здесь недоступна. Архив готов — нажмите «Скачать готовый ZIP».');return;}
     downloadBusy=true;
     try{
       // Must be called directly in this click, not after ZIP generation or IDB awaits.
@@ -747,8 +863,26 @@
       preparedShare=null;
     }catch(e){
       if(e.name==='AbortError')message('Передача отменена. ZIP готов для повторной попытки; исходники сохранены.');
-      else message(`Не удалось передать ZIP: ${e.message}. Можно повторить или скачать файл обычной кнопкой. Исходники сохранены.`);
+      else{
+        shareDenied=true;
+        message(`Браузер не разрешил передачу ZIP (${e.message}). Нажмите «Скачать готовый ZIP»: повторная подготовка не нужна. Исходники сохранены.`);
+      }
     }finally{downloadBusy=false;renderExports();}
+  }
+  async function downloadFile(key,file,revision){
+    const url=URL.createObjectURL(file);urls.add(url);
+    const a=document.createElement('a');a.href=url;a.download=file.name;document.body.append(a);a.click();a.remove();
+    state.methods[key].download={time:now(),filename:file.name,bytes:file.size,revision,confirmed:false};await persist();
+    message(`${key}: скачивание передано браузеру. Откройте «Загрузки» и проверьте ZIP. Локальные исходники сохранены.`);
+    setTimeout(()=>{URL.revokeObjectURL(url);urls.delete(url);},300000);
+  }
+  async function downloadPrepared(key){
+    const item=preparedShare;
+    if(!item||item.projectId!==state.id||item.key!==key||item.revision!==state.methods[key].revision)return exportSet(key);
+    if(downloadBusy)return;
+    downloadBusy=true;renderExports();
+    try{await downloadFile(key,item.file,item.revision);}
+    finally{downloadBusy=false;renderExports();}
   }
   async function exportSet(key,delivery='download'){
     if(downloadBusy)return;
@@ -786,6 +920,7 @@
             plannedTargets:METHODS[key].grid,sphereCoverage:'not_validated',
             camera:m.camera,photoSource:m.photoSource||null,photoRequest:m.photoRequest||null,orientationModel:m.orientationModel||'legacy-013',
             frames:m.shots.filter(Boolean),videos:m.videos,guideEvents:m.guideEvents,
+            browser:navigator.userAgent,diagnostics:(state.diagnostics||[]).filter(e=>e.method===key),
             passFinished:m.finished,totalSourceBytes:bytes,
             notes:['No resize or video transcoding during export.',
               'Video-frame JPEG is explicitly distinguished from ImageCapture photo.',
@@ -793,7 +928,7 @@
               'Interrupted recordings may contain only persisted chunks; test playback.',
               'Completing the guide does not establish full spherical coverage.']};
           await add('capture.json',[new Blob([JSON.stringify(manifest,null,2)],{type:'application/json'})]);
-          await add('README.txt',[new Blob([`${folder}\nОбъект: ${state.objectName}\nОдна физическая точка: S01\n\n${METHODS[key].help}\n\nПараметры каждого файла — capture.json. Фото не уменьшены при экспорте. Видео — исходные файлы; после перезапуска продолжение находится в отдельном файле. Кадры из видео не извлекались.\nЗавершение прохода не означает, что сфера покрыта полностью. Сшивка и проверка выполняются отдельно.\n`])]);
+          await add('README.txt',[new Blob([`${folder}\nОбъект: ${state.objectName}\nСтанция S01: ${state.stationName||'без названия'}\n\n${METHODS[key].help}\n\nПараметры каждого файла — capture.json. Фото не уменьшены при экспорте. Видео — исходные файлы; после перезапуска продолжение находится в отдельном файле. Кадры из видео не извлекались.\nЗавершение прохода не означает, что сфера покрыта полностью. Сшивка и проверка выполняются отдельно.\n`])]);
           zip.end();
         })().catch(e=>{zip.terminate();reject(e);});
       });
@@ -803,16 +938,11 @@
       const filename=`${slug}_${folder}.zip`;
       if(delivery==='share'){
         const file=new File([blob],filename,{type:'application/zip'});
-        if(!navigator.canShare?.({files:[file]})){preparedShare=null;message('Этот браузер не передаёт ZIP. Используйте «Скачать ZIP», затем «Поделиться» в «Файлах»/«Загрузках».');return;}
         preparedShare={projectId:state.id,key,revision:m.revision,file};
+        if(!navigator.canShare?.({files:[file]})){shareDenied=true;message('Этот браузер не передаёт ZIP. Архив готов — нажмите «Скачать готовый ZIP».');return;}
         message('ZIP готов. Нажмите «Поделиться ZIP», выберите Google Диск и нужную папку.');return;
       }
-      const url=URL.createObjectURL(blob);urls.add(url);
-      const a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();
-      state.methods[key].download={time:now(),filename,bytes:blob.size,revision:m.revision,confirmed:false};await persist();
-      message(`${key}: скачивание передано браузеру. Откройте «Загрузки» и проверьте ZIP. Локальные исходники сохранены.`);
-      // Leave enough time for Android's download manager to consume the URL.
-      setTimeout(()=>{URL.revokeObjectURL(url);urls.delete(url);},300000);
+      await downloadFile(key,new File([blob],filename,{type:'application/zip'}),m.revision);
     }finally{downloadBusy=false;renderExports();}
   }
   document.addEventListener('visibilitychange',()=>{
